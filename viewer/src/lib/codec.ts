@@ -66,7 +66,7 @@ export function mayBeHevc(codec: string | null | undefined): boolean {
  * 同じ画質(VMAF)で H.264 は H.265 の約何倍のビットレートになるか(docs/codec.md の測定)。
  * 帯域、KVS の取り込みと保存、S3 の保存はビットレートに比例する。
  */
-export const H264_BITRATE_RATIO = 1.5;
+export const H264_BITRATE_RATIO = 1.6;
 
 interface CodecState {
   codec: string | null;

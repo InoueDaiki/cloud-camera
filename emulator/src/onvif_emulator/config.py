@@ -22,7 +22,8 @@ import yaml
 # ---------------------------------------------------------------------------
 
 
-# H.264 の CRF を H.265 よりいくつ下げると同程度の画質になるか(docs/codec.md の測定。既定の Quality 60 付近)
+# H.264 の CRF を H.265 よりいくつ下げると同程度の画質(VMAF)になるか。エミュレーターの preset(ultrafast)では
+# 同じ CRF でほぼ同じ VMAF だった(Quality 60 = CRF 28 で H.265 に揃う H.264 の CRF は 28.3〜28.9。docs/codec.md)
 H264_CRF_OFFSET = 0
 
 CODECS = ("H265", "H264")
