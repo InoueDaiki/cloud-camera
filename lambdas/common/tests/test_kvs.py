@@ -130,35 +130,57 @@ def test_list_fragments_server_timestamp(monkeypatch):
     assert [f.number for f in got] == ["1"]  # サーバー時刻で絞り込む
 
 
-class TestMinuteReady:
-    def _patch(self, monkeypatch, frags):
-        calls = []
+def _lf(n, producer, size=10, server=None, length=1000):
+    return {"FragmentNumber": str(n), "FragmentSizeInBytes": size, "ProducerTimestamp": producer,
+            "ServerTimestamp": server or producer, "FragmentLengthInMilliseconds": length}
 
-        def lf(stream, start, end, selector="PRODUCER_TIMESTAMP"):
-            calls.append((start, end, selector))
-            return frags
 
-        monkeypatch.setattr(kvs, "list_fragments", lf)
-        return calls
+def test_list_fragments_dedupes_resent_fragments(monkeypatch):
+    # 回線断からの復旧時の再送: 同じ ProducerTimestamp の断片が 2 つ(番号が違う)入る
+    st = _archived(monkeypatch)
+    st.add_response("list_fragments", {"Fragments": [
+        _lf(10, T(10, 20, 1), size=500), _lf(11, T(10, 20, 2), size=500),
+        _lf(20, T(10, 20, 2), size=500, server=T(10, 25)),  # 再送(同じ大きさ)→ 先に届いた 11 を残す
+        _lf(12, T(10, 20, 3), size=100),  # 途中で切れた断片
+        _lf(21, T(10, 20, 3), size=500, server=T(10, 25)),  # 再送(大きい方を残す)
+    ]})
+    st.activate()
+    got = kvs.list_fragments("s", T(10, 20), T(10, 21))
+    assert [g.number for g in got] == ["10", "11", "21"]
 
-    def test_passed(self, monkeypatch):
-        calls = self._patch(monkeypatch, [frag(1, T(10, 20, 59)), frag(2, T(10, 21, 0, 500))])
-        assert kvs.minute_ready("s", T(10, 21), T(10, 21, 40)) == (True, "passed")
-        assert calls == [(T(10, 21, 10), T(10, 21, 45), "SERVER_TIMESTAMP")]
 
-    def test_producer_behind(self, monkeypatch):
-        self._patch(monkeypatch, [frag(1, T(10, 20, 30)), frag(2, T(10, 20, 31))])
-        ready, why = kvs.minute_ready("s", T(10, 21), T(10, 21, 40))
-        assert not ready and why.startswith("producer_behind") and "29.0s" in why
+def test_get_images_dedupes_same_timestamp(monkeypatch):
+    st = _archived(monkeypatch)
+    b64 = base64.b64encode(b"x").decode()
+    st.add_response("get_images", {"Images": [
+        {"TimeStamp": T(10, 20, 1), "Error": "NO_MEDIA"}, {"TimeStamp": T(10, 20, 1), "ImageContent": b64},
+        {"TimeStamp": T(10, 20, 2), "ImageContent": b64}, {"TimeStamp": T(10, 20, 2), "ImageContent": b64}]})
+    st.activate()
+    got = kvs.get_images("s", T(10, 20), T(10, 21))
+    assert [g.ts_ms for g in got] == [epoch_ms(T(10, 20, 1)), epoch_ms(T(10, 20, 2))]
+    assert got[0].content == b"x"
 
-    def test_quiet(self, monkeypatch):
-        self._patch(monkeypatch, [])
-        assert kvs.minute_ready("s", T(10, 21), T(10, 21, 40)) == (True, "quiet")
 
-    def test_max_wait(self, monkeypatch):
-        calls = self._patch(monkeypatch, [frag(1, T(10, 20, 30))])
-        assert kvs.minute_ready("s", T(10, 21), T(10, 31), max_wait_seconds=600) == (True, "max_wait")
-        assert calls == []
+def test_fragment_cache(monkeypatch):
+    st = _archived(monkeypatch)
+    st.activate()  # 応答なし: API を呼んだら失敗する
+    frs = [frag(1, T(10, 20, 1)), frag(2, T(10, 21, 1)), frag(3, T(10, 22, 1))]
+    kvs.set_fragment_cache("s", T(10, 20), T(10, 23), frs)
+    assert [f.number for f in kvs.list_fragments("s", T(10, 21), T(10, 22))] == ["2"]
+    assert kvs.list_fragments("s", T(10, 22), T(10, 23))[0].number == "3"
+    # 範囲外・別のストリーム・サーバー時刻はキャッシュを使わない
+    for args, kw in [(("s", T(10, 19), T(10, 21)), {}), (("other", T(10, 21), T(10, 22)), {}),
+                     (("s", T(10, 21), T(10, 22)), {"selector": "SERVER_TIMESTAMP"})]:
+        with pytest.raises(Exception):
+            kvs.list_fragments(*args, **kw)
+    kvs.clear_fragment_cache("s")
+    with pytest.raises(Exception):
+        kvs.list_fragments("s", T(10, 21), T(10, 22))
+
+
+def test_watermark_ms():
+    assert kvs.watermark_ms([]) is None
+    assert kvs.watermark_ms([frag(2, T(10, 20, 5), 933), frag(1, T(10, 20, 1))]) == epoch_ms(T(10, 20, 5)) + 933
 
 
 def test_get_images_pages_and_decodes(monkeypatch):

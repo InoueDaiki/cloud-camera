@@ -22,8 +22,8 @@ from typing import Any, Callable
 
 import boto3
 
-from common import MinuteResult, NotReady, kvs, log, max_rss_mb
-from common.timeutil import epoch_ms, from_epoch_ms, media_prefix, to_utc, utcnow
+from common import MinuteResult, kvs, log, max_rss_mb
+from common.timeutil import epoch_ms, from_epoch_ms, media_prefix, to_utc
 
 GAP_MS = 500
 SPRITE_COLS, SPRITE_ROWS = 10, 6
@@ -262,11 +262,6 @@ class Archiver:
     list_fragments: Callable[..., list[kvs.Fragment]] = kvs.list_fragments
     clip_builder: Callable[..., Clip] = build_clip
     get_images: Callable[..., list[kvs.Image]] = kvs.get_images
-    minute_ready: Callable[..., tuple[bool, str]] = kvs.minute_ready
-    now: Callable[[], datetime] = utcnow
-    # 断片が出そろったかの判定(common.kvs.minute_ready)。quiet は LAG_SECONDS と同じにする
-    quiet_seconds: int = 30
-    max_wait_seconds: int = 600
 
     def __post_init__(self):
         if self.s3 is None:
@@ -305,12 +300,7 @@ class Archiver:
         t: dict[str, Any] = {}
         t0 = time.monotonic()
         stream = self.stream_name(camera_id)
-        # 送信が遅れていて断片が出そろっていなければ、失敗にせず次の起動に回す
-        ready, why = self.minute_ready(stream, end, self.now(), quiet_seconds=self.quiet_seconds,
-                                       max_wait_seconds=self.max_wait_seconds)
-        if not ready:
-            raise NotReady(why)
-        t["ready"] = why
+        # 断片が出そろったか(ウォーターマーク)は run_pipeline が判定済み。一覧は run_pipeline が取った結果から返る
         frags = self.list_fragments(stream, start, end)
         t["list_ms"] = _ms(t0)
         if not frags:

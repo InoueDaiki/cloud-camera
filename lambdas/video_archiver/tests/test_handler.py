@@ -59,19 +59,28 @@ def test_handler_end_to_end(env, monkeypatch):
         base = first + timedelta(minutes=m)
         frs += [kvs.Fragment(str(m * 100 + s), epoch_ms(base) + s * 1000, 0, 1000, 50) for s in range(60)]
 
-    def lf(stream, start, end):
+    # 対象の最後の区間より後の断片(ウォーターマークが対象の区間をすべて越える)
+    frs.append(kvs.Fragment("999", epoch_ms(target_end) + 5000, 0, 1000, 50))
+    calls = []
+
+    def lf(stream, start, end, selector="PRODUCER_TIMESTAMP"):
         assert stream == "cc-cam-001"
+        calls.append((start, end))
         return [f for f in frs if epoch_ms(start) <= f.producer_ms < epoch_ms(end)]
+
+    # run_pipeline がウォーターマーク用に 1 回だけ ListFragments を呼び、各区間の一覧はそのキャッシュから返る
+    monkeypatch.setattr(kvs, "list_fragments", lf)
 
     def cb(stream, start, end, frags):
         return Clip(b"I" * 4 + b"F" * 2 * len(frags), 4, [[4 + 2 * i, 2, 1000] for i in range(len(frags))], frags)
 
-    arch = archiver.Archiver(bucket="media", minute_ready=lambda *a, **k: (True, "t"), list_fragments=lf, clip_builder=cb, get_images=lambda *a, **k: [])
+    arch = archiver.Archiver(bucket="media", clip_builder=cb, get_images=lambda *a, **k: [])
     handler._archiver = arch
 
     res = handler.lambda_handler({"camera_id": "cam-001"}, Ctx())
     assert res["stopped"] == "caught_up"
     assert [m["status"] for m in res["minutes"]] == ["DONE", "EMPTY", "DONE", "EMPTY", "EMPTY"]
+    assert len(calls) == 1 and calls[0][0] == first
 
     t = env
     cur = t.get_item(Key={"camera_id": "cam-001", "sk": "CURSOR#VIDEO"})["Item"]

@@ -14,10 +14,6 @@ from common.timeutil import epoch_ms
 BUCKET = "test-media"
 
 
-def READY(*a, **k):
-    return True, "test"
-
-
 def T(h, m, s=0, ms=0):
     return datetime(2026, 10, 24, h, m, s, ms * 1000, tzinfo=timezone.utc)
 
@@ -193,7 +189,7 @@ def s3():
 
 
 def make(s3, fk):
-    return Archiver(bucket=BUCKET, s3=s3, minute_ready=READY, list_fragments=fk.list_fragments, clip_builder=fk.clip_builder,
+    return Archiver(bucket=BUCKET, s3=s3, list_fragments=fk.list_fragments, clip_builder=fk.clip_builder,
                     get_images=fk.get_images)
 
 
@@ -242,7 +238,7 @@ def test_process_minute_clip_failure_raises(s3):
     def boom(*a):
         raise archiver.ArchiveError("hls")
 
-    arch = Archiver(bucket=BUCKET, s3=s3, minute_ready=READY, list_fragments=fk.list_fragments, clip_builder=boom, get_images=fk.get_images)
+    arch = Archiver(bucket=BUCKET, s3=s3, list_fragments=fk.list_fragments, clip_builder=boom, get_images=fk.get_images)
     with pytest.raises(archiver.ArchiveError):
         arch.process_minute("cam-001", T(10, 20), T(10, 21))
     assert s3.list_objects_v2(Bucket=BUCKET).get("KeyCount") == 0
@@ -264,7 +260,7 @@ def test_images_fallback_per_segment(s3):
             raise NotFound("No fragments found in the stream for the GetImages request.")
         return [kvs.Image(ts_ms=epoch_ms(a), content=b"x", error=None)]
 
-    arch = Archiver(bucket=BUCKET, s3=s3, minute_ready=READY, get_images=gi)
+    arch = Archiver(bucket=BUCKET, s3=s3, get_images=gi)
     segs = [[epoch_ms(T(10, 20, 30, 979)), epoch_ms(T(10, 20, 40, 500))],
             [epoch_ms(T(10, 20, 50)), epoch_ms(T(10, 21, 0, 900))]]
     imgs, err = arch._images("s", T(10, 20), T(10, 21), segs)
@@ -278,23 +274,5 @@ def test_images_other_error_is_reported(s3):
     def gi(stream, a, b, **kw):
         raise RuntimeError("throttled")
 
-    imgs, err = Archiver(bucket=BUCKET, s3=s3, minute_ready=READY, get_images=gi)._images("s", T(10, 20), T(10, 21), [[0, 1]])
+    imgs, err = Archiver(bucket=BUCKET, s3=s3, get_images=gi)._images("s", T(10, 20), T(10, 21), [[0, 1]])
     assert imgs == [] and "throttled" in err
-
-
-def test_process_minute_not_ready(s3):
-    from common import NotReady
-
-    seen = {}
-
-    def not_ready(stream, end, now, **kw):
-        seen.update(stream=stream, end=end, **kw)
-        return False, "producer_behind: 12.0s"
-
-    fk = FakeKvs([frag(1, T(10, 20, 0))])
-    arch = Archiver(bucket=BUCKET, s3=s3, minute_ready=not_ready, list_fragments=fk.list_fragments,
-                    quiet_seconds=15, max_wait_seconds=120)
-    with pytest.raises(NotReady):
-        arch.process_minute("cam-001", T(10, 20), T(10, 21))
-    assert seen == {"stream": "cc-cam-001", "end": T(10, 21), "quiet_seconds": 15, "max_wait_seconds": 120}
-    assert fk.calls == []  # 断片の一覧も取らない

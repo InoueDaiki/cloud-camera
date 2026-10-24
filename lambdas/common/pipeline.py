@@ -4,7 +4,12 @@
 1. 処理済み位置(CURSOR#{kind})の件を条件付き更新してリースを取る。取れなければ終了。
    カーソルがなければ「現在 − lag を 1 分境界に切り捨て − 5 分」で初期化する。
 2. 処理済み位置から「現在 − lag を 1 分境界に切り捨て」までを、最大 max_minutes 区間処理対象にする。
-3. 古い区間から順に process_minute を呼ぶ。区間の件には UpdateItem で自分の属性だけ書く。
+   対象があれば、カーソル以降の断片を ListFragments で 1 回取り、ウォーターマーク(届いている最新の断片の終わり)を求める。
+3. 古い区間から順に処理する。区間 [s, e) を処理してよいのは、
+   (a) ウォーターマークが e 以上(kvssink は時刻順に送るので、e より前に始まる断片はすべて届いている)、または
+   (b) 現在 − e が max_late_seconds 以上(エッジのバッファ上限を過ぎた。それより後に届く分は捨てる)
+   のどちらかを満たすとき。満たさなければそこで止めて次の起動を待つ(試行回数に数えない)。
+   process_minute を呼ぶ。区間の件には UpdateItem で自分の属性だけ書く。
    試行回数は処理の **前** に 1 足す(タイムアウトやメモリ不足で落ちても回数が残る)。
 4. 確定(DONE / EMPTY / FAILED)した区間が続く限り、処理済み位置を 1 区間ずつ進める。
    確定しなかった区間があればそこで止め、次の起動で再挑戦する。
@@ -27,8 +32,9 @@ import boto3
 from boto3.dynamodb.conditions import Attr
 from botocore.exceptions import ClientError
 
+from . import kvs
 from .log import log, max_rss_mb
-from .timeutil import MINUTE, floor_minute, iso, parse_iso, to_utc, utcnow
+from .timeutil import MINUTE, epoch_ms, floor_minute, from_epoch_ms, iso, parse_iso, to_utc, utcnow
 
 Kind = Literal["VIDEO", "DETECT"]
 Status = Literal["DONE", "EMPTY", "FAILED"]
@@ -45,6 +51,11 @@ EXPIRY_MARGIN_SECONDS = 300
 MIN_REMAINING_MS = 15_000
 # Lambda コンテキストがないとき(ローカル実行)のリース時間
 DEFAULT_LEASE_SECONDS = 900
+# 区間の終わりからこれだけ過ぎたら、ウォーターマークが届いていなくても処理する(秒)。
+# エッジ(kvssink)のバッファ上限 10 分 + 余裕。それより後に届いた断片は処理しない(エッジ側でも捨てられる量)
+MAX_LATE_SECONDS = 720
+# ウォーターマークを求めるときの ListFragments の範囲の終わり(現在 + これ)。時計のずれの余裕
+WATERMARK_FUTURE_SECONDS = 60
 
 
 @dataclass
@@ -73,6 +84,12 @@ def _table(table: Any | None):
     if table is not None:
         return table
     return boto3.resource("dynamodb").Table(os.environ["STATE_TABLE"])
+
+
+def _max_late_seconds(v: int | None) -> int:
+    if v is not None:
+        return v
+    return int(os.environ.get("MAX_LATE_SECONDS") or MAX_LATE_SECONDS)
 
 
 def _retention_days(retention_days: int | None) -> int:
@@ -114,6 +131,10 @@ def run_pipeline(
     kvs_retention_seconds: int = KVS_RETENTION_SECONDS,
     expiry_margin_seconds: int = EXPIRY_MARGIN_SECONDS,
     min_remaining_ms: int = MIN_REMAINING_MS,
+    max_late_seconds: int | None = None,
+    stream_name: str | None = None,
+    list_fragments: Callable[..., list] | None = None,
+    use_watermark: bool = True,
 ) -> dict:
     """1 回の起動ぶんの区間ループを回し、結果の要約を返す。
 
@@ -121,6 +142,10 @@ def run_pipeline(
     table: DynamoDB の Table リソース(省略時は環境変数 STATE_TABLE)。
     now: 現在時刻を返す関数(テスト用)。
     retention_days: expires_at の日数(省略時は環境変数 MEDIA_RETENTION_DAYS、既定 30)。
+    max_late_seconds: ウォーターマークを待つ上限(省略時は環境変数 MAX_LATE_SECONDS、既定 720)。
+    stream_name: KVS のストリーム名(省略時は kvs.stream_name_for(camera_id))。
+    list_fragments: kvs.list_fragments の差し替え(テスト用)。
+    use_watermark: False ならウォーターマークを見ずに lag だけで処理する(KVS を使わないテスト用)。
     """
     if kind not in _PREFIX:
         raise ValueError(f"unknown kind: {kind}")
@@ -167,6 +192,7 @@ def run_pipeline(
     cursor = parse_iso(resp["Attributes"]["processed_until"])
     summary["processed_until_before"] = iso(cursor)
 
+    stream = stream_name or kvs.stream_name_for(camera_id)
     try:
         _loop(
             summary=summary,
@@ -186,8 +212,12 @@ def run_pipeline(
             kvs_retention_seconds=kvs_retention_seconds,
             expiry_margin_seconds=expiry_margin_seconds,
             min_remaining_ms=min_remaining_ms,
+            watermark_fn=(lambda s, e: _watermark(stream, s, e, list_fragments or kvs.list_fragments, summary))
+            if use_watermark else None,
+            max_late_seconds=_max_late_seconds(max_late_seconds),
         )
     finally:
+        kvs.clear_fragment_cache(stream)
         # 5. リースを解放する(自分が持っているときだけ)
         try:
             tbl.update_item(
@@ -224,22 +254,43 @@ def _loop(
     kvs_retention_seconds: int,
     expiry_margin_seconds: int,
     min_remaining_ms: int,
+    watermark_fn: Callable[[datetime, datetime], int | None] | None,
+    max_late_seconds: int,
 ) -> None:
     # 2. 処理対象: [cursor, target_end) を 1 分ずつ、最大 max_minutes 区間
-    target_end = floor_minute(now() - timedelta(seconds=lag_seconds))
+    t_now = now()
+    target_end = floor_minute(t_now - timedelta(seconds=lag_seconds))
     summary["target_end"] = iso(target_end)
     summary["processed_until"] = iso(cursor)
+    wm: int | None = None
+    if watermark_fn is not None and cursor + MINUTE <= target_end:
+        # カーソル以降の断片を 1 回で取る(process_minute の list_fragments はこの結果から返る)
+        wm = watermark_fn(cursor, t_now + timedelta(seconds=WATERMARK_FUTURE_SECONDS))
     budget_ms = 0  # これまでで最も長かった 1 区間の処理時間
     count = 0
     start = cursor
     while start + MINUTE <= target_end and count < max_minutes:
+        end = start + MINUTE
+        if watermark_fn is not None:
+            # 3. 区間の断片が出そろったか(ウォーターマーク)、待つ上限を過ぎたか
+            late_s = (to_utc(now()) - to_utc(end)).total_seconds()
+            if wm is not None and wm >= epoch_ms(end):
+                pass
+            elif late_s >= max_late_seconds:
+                summary.setdefault("max_late", []).append(iso(start))
+                log("minute_max_late", camera_id=camera_id, kind=p, start=iso(start), late_seconds=int(late_s),
+                    watermark=_iso_ms(wm))
+            else:
+                summary["stopped"] = "waiting"
+                log("minute_waiting", camera_id=camera_id, kind=p, start=iso(start), watermark=_iso_ms(wm),
+                    late_seconds=int(late_s), max_late_seconds=max_late_seconds)
+                return
         rem = remaining_ms()
         need = max(min_remaining_ms, int(budget_ms * 1.5))
         if rem is not None and rem < need:
             summary["stopped"] = "time"
             log("stop_time", camera_id=camera_id, remaining_ms=rem, need_ms=need)
             return
-        end = start + MINUTE
         t0 = time.monotonic()
         rec = _process_one(
             tbl=tbl,
@@ -393,3 +444,27 @@ def _process_one(
     rec.update(status=result.status, duration_ms=duration_ms)
     log("minute_done", camera_id=camera_id, kind=p, start=sk, status=result.status, attempt=attempt, duration_ms=duration_ms, max_rss_mb=max_rss_mb())
     return rec
+
+
+def _iso_ms(ms: int | None) -> str | None:
+    if ms is None:
+        return None
+    return from_epoch_ms(ms).strftime("%Y-%m-%dT%H:%M:%S.") + f"{ms % 1000:03d}Z"
+
+
+def _watermark(stream: str, start: datetime, end: datetime, list_fn: Callable[..., list], summary: dict) -> int | None:
+    """カーソル以降の断片を取り、キャッシュに置いてウォーターマーク(epoch ミリ秒)を返す。
+
+    失敗したら None(区間は max_late_seconds を過ぎるまで待つ)。
+    """
+    try:
+        frags = list_fn(stream, start, end)
+    except Exception as e:  # noqa: BLE001 - 取れなければ待つだけ
+        summary["watermark_error"] = _err_str(e)
+        log("watermark_error", stream=stream, error=_err_str(e))
+        return None
+    kvs.set_fragment_cache(stream, start, end, frags)
+    wm = kvs.watermark_ms(frags)
+    summary["watermark"] = _iso_ms(wm)
+    summary["watermark_fragments"] = len(frags)
+    return wm

@@ -69,6 +69,7 @@ PK `camera_id`(S)、SK `sk`(S)。TTL 属性 `expires_at`(数値、epoch 秒)。
 | `lease_owner` | S | Lambda のリクエスト ID |
 
 カーソルが存在しないときは「現在時刻 − lag」を 1 分境界に切り捨てた時刻 − 5 分 から始める。
+`processed_until` より前の区間はすべて確定済み(下の「区間を処理してよい条件」を満たしてから確定する)。
 
 **区間**: SK = 区間の開始時刻 `2026-10-24T10:20:00Z`
 
@@ -103,7 +104,17 @@ def run_pipeline(kind: Literal["VIDEO", "DETECT"], camera_id: str,
 `process_minute(camera_id, start, end)` は 1 分区間を処理し、`MinuteResult(status, attributes)` を返す(`attributes` は区間の件に UpdateItem する属性)。
 `status` は `DONE` / `EMPTY`、再試行しても無駄なら `FAILED`。`context` には Lambda のコンテキストを渡す(残り時間での打ち切りとリースに使う)。
 例外を投げたら失敗扱いで、構想.md の「1回の起動での流れ」どおりに再試行・`FAILED` 確定する。
-`common.NotReady` を投げたら「まだ処理できない」扱い(試行回数に数えず、カーソルはその手前で止まる)。断片が出そろったかは `common.kvs.minute_ready` で判定できる。
+`common.NotReady` を投げたら「まだ処理できない」扱い(試行回数に数えず、カーソルはその手前で止まる)。
+
+**区間を処理してよい条件(ウォーターマーク)**: 共通処理が判定し、process_minute は呼ばれた区間の断片が出そろっている前提でよい。
+区間 [s, e) は (a) ストリームのウォーターマーク(届いている最新の断片の ProducerTimestamp + 長さ)≥ e、または
+(b) 現在 − e ≥ `MAX_LATE_SECONDS`(環境変数、既定 720 秒 = エッジのバッファ上限 10 分 + 余裕)のどちらかで処理する。
+満たさなければ止めて次の起動を待つ(試行回数に数えない)。前提はエッジ(kvssink)が断片を時刻順に送り、回線断のあとは未 ACK の分を古い順に送り直すこと。
+区間は 1 回だけ処理し、再処理はしない(「処理済み位置より前はすべて確定」は維持)。構想.md の「1回の起動での流れ」との差は、2. と 3. の間にこの判定が入ること。
+- 限界: `MAX_LATE_SECONDS` より後に届いた断片は捨てる(エッジ側でも捨てられている量)。配信停止中やオフライン中は、処理済み位置が現在より約 `MAX_LATE_SECONDS` 遅れる(その範囲はビューワーが KVS から再生する)
+- ListFragments は、処理する区間がある起動ごとに 1 回(カーソル 〜 現在)。結果を起動の間キャッシュし、`common.kvs.list_fragments` はそこから返す
+- 再送による重複: 同じ ProducerTimestamp の断片が KVS に 2 つ入りうる。`common.kvs.list_fragments` が ProducerTimestamp で重複を除き、clip、`segments`、`fragment_count`、GetImages の時刻はその結果に揃える
+- `common.kvs.minute_ready` は廃止(「何も届いていない = 送信が止まった」とみなして進むため、回線断のあとの断片を取りこぼした)
 `{kind}_attempts` は処理の前に 1 足す(タイムアウトで落ちても数える)。失敗の理由は `{kind}_error`(S、`video_error` / `detect_error`)に残し、成功したら消す。
 詳細は [lambdas/common/README.md](../lambdas/common/README.md)。
 Scheduler からの入力は `{"camera_id": "cam-001"}`。カメラごとに 1 本のスケジュールを作る。

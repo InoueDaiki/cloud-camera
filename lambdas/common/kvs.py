@@ -1,8 +1,8 @@
 """KVS の読み出し系 API のヘルパー(動画の退避と物体検出で共用)。
 
 - GetDataEndpoint の結果をプロセス内でキャッシュする(ウォームスタートで使い回す)。
-- ListFragments / GetImages のページ送りをまとめる。
-- ListFragments の結果から録画範囲(segments)を作る。
+- ListFragments / GetImages のページ送りをまとめる。同じ ProducerTimestamp の断片(再送の重複)は 1 つにする。
+- ListFragments の結果から録画範囲(segments)とウォーターマークを作る。
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 import boto3
@@ -77,6 +77,7 @@ def clear_cache() -> None:
     with _lock:
         _endpoints.clear()
         _clients.clear()
+        _fragment_cache.clear()
         _kv_client = None
 
 
@@ -105,15 +106,54 @@ class Fragment:
         return self.producer_ms + self.length_ms
 
 
+# 1 回の起動の間だけ使う ListFragments(プロデューサー時刻)の結果。run_pipeline がウォーターマークを
+# 求めるために取った「カーソル以降の断片」を置き、process_minute の list_fragments はここから返す(呼び出しを増やさない)
+_fragment_cache: dict[str, tuple[int, int, list[Fragment]]] = {}
+
+
+def set_fragment_cache(stream_name: str, start: datetime, end: datetime, fragments: list[Fragment]) -> None:
+    """[start, end) の断片の一覧をキャッシュする(プロデューサー時刻、dedupe 済みのもの)。"""
+    with _lock:
+        _fragment_cache[stream_name] = (epoch_ms(start), epoch_ms(end), list(fragments))
+
+
+def clear_fragment_cache(stream_name: str | None = None) -> None:
+    with _lock:
+        if stream_name is None:
+            _fragment_cache.clear()
+        else:
+            _fragment_cache.pop(stream_name, None)
+
+
+def dedupe_fragments(fragments: list[Fragment]) -> list[Fragment]:
+    """同じ ProducerTimestamp の断片を 1 つにする(時刻順で返す)。
+
+    回線断からの復旧時、kvssink は ACK を受け取れなかった断片を送り直すので、同じ時刻の断片が KVS に 2 つ入りうる。
+    大きい方(途中で切れていない方)を残し、同じ大きさなら先に届いた方(断片番号の小さい方)を残す。
+    """
+    best: dict[int, Fragment] = {}
+    for f in fragments:
+        cur = best.get(f.producer_ms)
+        if cur is None or (f.size, -int(f.number)) > (cur.size, -int(cur.number)):
+            best[f.producer_ms] = f
+    return sorted(best.values(), key=lambda x: (x.producer_ms, int(x.number)))
+
+
 def list_fragments(stream_name: str, start: datetime, end: datetime, *, selector: str = "PRODUCER_TIMESTAMP") -> list[Fragment]:
-    """プロデューサー時刻が [start, end) で始まる断片を、時刻順に返す。
+    """プロデューサー時刻が [start, end) で始まる断片を、時刻順に返す(同じ時刻の重複は 1 つにする)。
 
     区間をまたぐ断片は「開始時刻が属する区間」に割り当てる、という方針をここで実現する。
     ListFragments の範囲指定の端の扱いに依存しないよう、開始時刻で改めて絞り込む。
-    selector="SERVER_TIMESTAMP" なら、サーバー時刻(KVS に届いた時刻)が [start, end) の断片を返す。
+    run_pipeline がキャッシュした範囲に収まるなら、API を呼ばずにキャッシュから返す。
+    selector="SERVER_TIMESTAMP" なら、サーバー時刻(KVS に届いた時刻)が [start, end) の断片を返す(重複排除しない)。
     """
-    client = archived_media_client(stream_name, LIST_FRAGMENTS)
     start_ms, end_ms = epoch_ms(start), epoch_ms(end)
+    if selector == "PRODUCER_TIMESTAMP":
+        with _lock:
+            hit = _fragment_cache.get(stream_name)
+        if hit and hit[0] <= start_ms and end_ms <= hit[1]:
+            return [f for f in hit[2] if start_ms <= f.producer_ms < end_ms]
+    client = archived_media_client(stream_name, LIST_FRAGMENTS)
     kwargs: dict[str, Any] = {
         "StreamName": stream_name,
         "MaxResults": 1000,
@@ -140,41 +180,20 @@ def list_fragments(stream_name: str, start: datetime, end: datetime, *, selector
         if not token:
             break
         kwargs = {"StreamName": stream_name, "NextToken": token, "MaxResults": 1000}
+    if selector == "PRODUCER_TIMESTAMP":
+        return dedupe_fragments(list(seen.values()))
     return sorted(seen.values(), key=lambda x: (x.producer_ms, int(x.number)))
 
 
-def minute_ready(
-    stream_name: str,
-    end: datetime,
-    now: datetime,
-    *,
-    quiet_seconds: int = 30,
-    max_wait_seconds: int = 600,
-) -> tuple[bool, str]:
-    """区間 [.., end) の断片が出そろったかを判定する(遅れて届く断片の取りこぼしを防ぐ)。
+def watermark_ms(fragments: list[Fragment]) -> int | None:
+    """ウォーターマーク: 届いている断片のうち最も新しいものの終わり(プロデューサー時刻 + 長さ、epoch ミリ秒)。
 
-    プロデューサー(エッジ)の送信が遅れていると、区間の終わりから lag が過ぎても断片がまだ届いていない
-    (実測: 送信側の CPU 不足で、届くのが 70 秒遅れた)。KVS へは時刻順に届くので、次の条件で「出そろった」とみなす。
-
-    - 最近 quiet_seconds 秒に届いた断片のうち、プロデューサー時刻が end 以降のものがある(送信が end を越えた)
-    - 最近 quiet_seconds 秒に届いた断片がない(送信が止まっている。止まる前の断片はすべて届いている)
-    - 区間の終わりから max_wait_seconds 秒が過ぎた(待ちすぎ。そのとき届いている分で処理する)
-
-    戻り値は (出そろったか, 理由)。ListFragments(サーバー時刻)を 1 回呼ぶ。
+    kvssink は断片を時刻順に送り、回線断のあとはバッファの未 ACK 分を古い順に送り直す。
+    よって、ウォーターマークより前に始まる断片はすべて KVS に届いている(とみなせる)。
     """
-    now = to_utc(now)
-    waited = (now - to_utc(end)).total_seconds()
-    if waited >= max_wait_seconds:
-        return True, "max_wait"
-    recent = list_fragments(
-        stream_name, now - timedelta(seconds=quiet_seconds), now + timedelta(seconds=5), selector="SERVER_TIMESTAMP"
-    )
-    if not recent:
-        return True, "quiet"
-    newest = max(f.producer_ms for f in recent)
-    if newest >= epoch_ms(end):
-        return True, "passed"
-    return False, f"producer_behind: newest producer {(epoch_ms(end) - newest) / 1000:.1f}s before end"
+    if not fragments:
+        return None
+    return max(f.end_ms for f in fragments)
 
 
 MAX_PAD_MS = 250
@@ -266,5 +285,10 @@ def get_images(
         if not token:
             break
         kwargs["NextToken"] = token
-    out.sort(key=lambda x: x.ts_ms)
-    return out
+    # 再送で同じ時刻の断片が 2 つあると、同じ時刻の画像が重なりうる。中身のある方を 1 枚残す
+    best: dict[int, Image] = {}
+    for im in out:
+        cur = best.get(im.ts_ms)
+        if cur is None or (cur.content is None and im.content is not None):
+            best[im.ts_ms] = im
+    return sorted(best.values(), key=lambda x: x.ts_ms)

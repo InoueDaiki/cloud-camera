@@ -3,7 +3,8 @@ from decimal import Decimal
 
 import pytest
 
-from common import MinuteResult, run_pipeline
+from common import MinuteResult, kvs, run_pipeline
+from common.timeutil import epoch_ms
 
 CAM = "cam-001"
 
@@ -37,8 +38,19 @@ class Recorder:
         return MinuteResult(self.status, dict(self.attrs, video_marker=start.isoformat()))
 
 
+def live_stream(clock):
+    """送信が順調なストリーム: 現在の 2 秒前に始まる断片がある(ウォーターマークは対象の区間をすべて越える)。"""
+
+    def lf(stream, start, end, selector="PRODUCER_TIMESTAMP"):
+        f = kvs.Fragment("1", epoch_ms(clock.dt) - 2000, epoch_ms(clock.dt) - 1900, 1000, 10)
+        return [f] if epoch_ms(start) <= f.producer_ms < epoch_ms(end) else []
+
+    return lf
+
+
 def run(table, clock, proc, kind="VIDEO", **kw):
-    args = dict(lag_seconds=30, max_minutes=10, max_attempts=3, table=table, now=clock, retention_days=30)
+    args = dict(lag_seconds=30, max_minutes=10, max_attempts=3, table=table, now=clock, retention_days=30,
+                list_fragments=live_stream(clock), stream_name="s")
     args.update(kw)
     return run_pipeline(kind, CAM, proc, **args)
 
@@ -312,5 +324,6 @@ def test_not_ready_stops_without_counting_attempt(table, clock):
 
 
 def test_table_from_env(table, clock):
-    res = run_pipeline("VIDEO", CAM, Recorder(), lag_seconds=30, max_minutes=1, max_attempts=3, now=clock)
+    res = run_pipeline("VIDEO", CAM, Recorder(), lag_seconds=30, max_minutes=1, max_attempts=3, now=clock,
+                       list_fragments=live_stream(clock))
     assert res["processed_until"] == "2026-10-24T10:25:00Z"

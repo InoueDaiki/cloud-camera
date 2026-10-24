@@ -13,11 +13,7 @@ _archiver: Archiver | None = None
 def _get_archiver() -> Archiver:
     global _archiver
     if _archiver is None:
-        _archiver = Archiver(
-            bucket=os.environ["MEDIA_BUCKET"],
-            quiet_seconds=env_int("LAG_SECONDS", 30),
-            max_wait_seconds=env_int("MAX_WAIT_SECONDS", 600),
-        )
+        _archiver = Archiver(bucket=os.environ["MEDIA_BUCKET"])
     return _archiver
 
 
