@@ -283,8 +283,8 @@ class MasterSupervisor:
                 except json.JSONDecodeError:
                     pass
             if text:
-                # SDK のログ(AWS_KVS_LOG_LEVEL)。多いので DEBUG。警告とエラーだけ INFO で出す
-                lvl = logging.INFO if (" WARN " in text or " ERROR " in text or "[cc]" in text) else logging.DEBUG
+                # SDK のログ(AWS_KVS_LOG_LEVEL)。WARN はソケットの確認などで多いので DEBUG。エラーと自前の行だけ INFO で出す
+                lvl = logging.INFO if (" ERROR " in text or "[cc]" in text) else logging.DEBUG
                 log.log(lvl, "[%s] webrtc: %s", self.camera_id, text)
         return await self.proc.wait()
 

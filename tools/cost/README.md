@@ -183,7 +183,7 @@ detector 1,024 MB(infra の既定)・1.5 秒 + 60 枚 × 0.135 秒(yolox_tiny IN
 - **KVS WebRTC のライブ**(2026-10-24 追加): チャネル $0.045 / 台・月、メッセージ $3.375 / 100 万件、TURN $0.18 / 1,000 分(東京、docs/webrtc.md §4)。
   既定(WebRTC で 1 時間 / 台・月、1 時間に 4 回接続、1 回 20 件、半分が TURN)で **+$0.05 / 台・月**(合計 $24.82 → $24.87)。
   P2P なら映像の転送料はかからない。1 日 1 時間を全部 TURN で見ても +$0.41(`--webrtc-view-hours 30 --webrtc-turn-ratio 1`)。
-  WebRTC の 3 つの単価は SSO が切れて Pricing API を呼べなかったため、docs/webrtc.md §4 で Price List の index.json から確認した値を単価表に転記した(`note` 欄。次に `prices` を取り直すと置き換わる)。
+  単価は Pricing API で取得(usagetype `APN1-SignalingChannel` / `APN1-SignalingMessages` / `APN1-TURNMinutes`、publicationDate 2026-09-30)。
   実測(`measure`)にはまだ WebRTC の項目がない(CloudWatch の `AWS/KinesisVideo` のシグナリングのメトリクスから取れる見込み)
 - 検出を 5 秒おきにすると合計 $20.99、検出なしで $18.53(`--detect-interval-s 5` / `0`)
 - 構想.md の試算例(1 Mbps、US East $0.0085 で取り込み約 $2.75)は、東京の $0.010965 で **$3.31**(GB = 2^30 バイト、301.7 GB)。

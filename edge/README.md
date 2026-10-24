@@ -112,7 +112,7 @@ docker compose exec edge python3 -m cc_edge.ptz http://emulator:8080/onvif/devic
 
 実 AWS での確認(2026-10-24、`TMP_PROJECT=cc-tmp-ptz edge/scripts/tmp-aws.sh up` の Thing、エッジはローカル実行、カメラは契約どおりのスタブ):
 API(`POST .../ptz`、202 まで約 50 ms)→ IoT Core → エッジ → ONVIF → シャドウ → `GET .../ptz` で新しい位置が見えるまで中央値約 250 ms。
-映像への反映はこれに KVS の LIVE HLS の遅れ(数秒)が加わる。
+映像への反映はこれにライブの遅れが加わる: WebRTC で POST から映像の変化まで 0.8〜0.9 秒(2026-10-24、cc-tmp-rtc)、HLS では数秒。
 
 ## KVS WebRTC のライブ
 

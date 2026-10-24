@@ -126,7 +126,7 @@ edge_up() {
   local src="${E2E_SOURCE:-file:/media/crosswalk_toronto.mp4}"
   if [[ "$src" == file:/media/* && ! -f "$ROOT/emulator/media/${src#file:/media/}" ]]; then
     echo "サンプル動画を取得する"
-    docker run --rm -v "$ROOT/emulator/media:/media" cloud-camera/onvif-emulator:latest \
+    docker run --rm -v "$ROOT/emulator/media:/media" "${EMULATOR_IMAGE:-cloud-camera/onvif-emulator:latest}" \
       python /app/scripts/fetch_sample_media.py --out /media || return 1
   fi
   echo "映像: $src"

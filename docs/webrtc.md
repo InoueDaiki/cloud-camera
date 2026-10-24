@@ -316,3 +316,21 @@ botocore の `SigV4QueryAuth`)。チャネルの ARN とエンドポイントは
 - API はシャドウを先に見て、WebRTC で見られないカメラ(無効、オフライン、master が `CONNECTED` でない)は 409 を返す(ビューワーはすぐ HLS へ)
 - ビューワーは KVS の JS SDK(2.9.0、npm で固定)のブラウザ向けバンドルを遅延読み込みする(npm の lib/ は Node の `events` と `ws` を require するため)
 - PTZ の操作は WebRTC のライブ再生中だけ(HLS のときは無効にし、「ライブ」で WebRTC につなぎ直せると案内する)
+
+### 実 AWS での確認(2026-10-24、`cc-tmp-rtc`、Mac の Docker のエミュレーター + エッジ、Chrome 155 headless、CloudFront 経由のビューワー)
+
+`KEEP=1 scripts/e2e/run.sh cc-tmp-rtc` が全段階 PASS(ライブ・KVS・S3 の再生、`webrtc-h265` / `webrtc-h264` / `hls-fallback`、PTZ、物体検出など)。
+映像はサンプル動画(交差点)のループ、main H.265 1280×720、sub H.264 640×360、15fps、キーフレーム 1 秒。経路は Chrome の選んだ候補が srflx(P2P、RTT 140〜160 ms)。
+
+| 項目 | 結果 |
+| --- | --- |
+| WebRTC H.265(main) | 再生できた(getStats の codec H.265、1280×720)。遅延 0.31〜0.43 秒(焼き込みの UTC とスクショの時刻の差、3 枚。x265 のエンコードの遅れを含む) |
+| WebRTC H.264(sub)| `getCapabilities` から H.265 を消すと H.264 640×360 に切り替わった。遅延 0.12〜0.24 秒(2 枚) |
+| HLS(比較、`?live=hls`) | 約 3.1 秒(2 枚) |
+| 最初の映像まで | API の呼び出しから 2.5〜5.2 秒(発行 + シグナリング + ICE + 次のキーフレーム。開いてから再生まで 3.3〜3.5 秒) |
+| H.265 と H.264 の同時視聴 | 2 人で main と sub の RTSP を両方読み、status は `viewers_by_codec {"H265": 1, "H264": 1}`、送信 1,425 kbps(main 1,039 + sub 386) |
+| desired で WebRTC を止める | 新しい視聴者は 409 で 1.6 秒で HLS。再生中の視聴者は映像が止まって約 12 秒で HLS に切り替わった(master が止まってもピア接続が閉じられず、映像の停止(8 秒)の検出で気づく) |
+| master が応答しない(SIGSTOP) | 新しい視聴者は 10 秒のタイムアウトで HLS(12.2 秒)。SIGCONT で master は再起動なしで戻った |
+| 「ライブ」で WebRTC に戻る | 有効に戻したあと 3.5 秒で WebRTC · H.265 |
+| PTZ(API → IoT Core → エッジ → ONVIF → 映像) | WebRTC H.265 で POST から映像の変化まで **807〜911 ms**(中央値 約 850 ms、4 回。1 回は変化の検出に失敗)。GET .../ptz が zoom 1 になるまで約 2.65 秒(ズームの移動に 2 秒かかるため) |
+| 録画への影響 | 上の操作の間、kvssink のパイプラインの再起動 0、`streaming` は true のまま |

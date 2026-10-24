@@ -27,7 +27,7 @@ from boto3.dynamodb.types import TypeDeserializer
 
 CAMERA = os.environ.get("E2E_CAMERA", "cam-001")
 GATEWAY = os.environ.get("E2E_GATEWAY", "gw-001")
-FFPROBE_IMAGE = os.environ.get("E2E_FFPROBE_IMAGE", "cloud-camera/onvif-emulator:latest")
+FFPROBE_IMAGE = os.environ.get("E2E_FFPROBE_IMAGE", os.environ.get("EMULATOR_IMAGE", "cloud-camera/onvif-emulator:latest"))
 # エミュレーターの ONVIF(compose のネットワーク内から見た URL)
 ONVIF_URL = os.environ.get("E2E_ONVIF_URL", "http://emulator:8080/onvif/device_service")
 

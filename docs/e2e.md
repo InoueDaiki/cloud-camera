@@ -33,6 +33,8 @@ scripts/destroy.sh cc-tmp-e2e           # 手で消すとき(AUTO_APPROVE=1 で�
 | `ARCHIVE_TIMEOUT` / `DETECT_TIMEOUT` | `480` | S3 退避・物体検出を待つ秒数 |
 | `E2E_OUT` | `$TMPDIR/cc-e2e/<project>-<時刻>` | ログ、結果、スクリーンショットの出力先(リポジトリの外) |
 | `HEADED` | `0` | `1` でブラウザを画面に出す |
+| `CC_EDGE_IMAGE` / `EMULATOR_IMAGE` | `cc-edge:dev` / `cloud-camera/onvif-emulator:latest` | compose がビルドするイメージのタグ。並行して別の検証をしているときは専用のタグにして、共用のタグを上書きしない |
+| `E2E_WEBRTC` | `1` | `0` でライブの方式(WebRTC / HLS への切り替え)の確認を飛ばす |
 | `E2E_QUESTION` | `直近10分で人は映った?` | 検索の質問 |
 | `E2E_SOURCE` | `file:/media/crosswalk_toronto.mp4` | エミュレーターの映像(`EMULATOR_SOURCE`)。物体検出で人が映るようにサンプル動画をループ再生する。なければ `emulator/scripts/fetch_sample_media.py` で取得する。`testsrc` で時刻入りのテストパターン |
 

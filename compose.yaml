@@ -15,7 +15,8 @@ services:
   edge:
     build:
       context: ./edge
-    image: cc-edge:dev
+    # 別の検証と同じタグを上書きしないよう、CC_EDGE_IMAGE で変えられる
+    image: ${CC_EDGE_IMAGE:-cc-edge:dev}
     depends_on:
       emulator:
         condition: service_healthy

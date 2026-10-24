@@ -57,7 +57,7 @@ React + TypeScript + Vite。UI は [Mantine](https://mantine.dev/)、再生は [
 - 命令は 1 つずつ順に送る(前の 202 を待つ)。待っている間の continuous / stop は最後の 1 つだけ送る
 - 現在の位置は `GET .../ptz`。操作中(と操作後 6 秒)は 0.7 秒、それ以外は 10 秒ごとに取り直す。
   ミニマップは最大倍率 4 倍(エミュレーターの既定)を仮定した目安
-- 操作から映像の変化まで WebRTC で約 1 秒(API → IoT Core → エッジ → ONVIF とエミュレーターの切り出し + WebRTC の遅れ)なので、「操作はおよそ 1 秒で映像に反映されます」と添える
+- 操作から映像の変化まで WebRTC で 0.8〜0.9 秒(実 AWS で計測。API → IoT Core → エッジ → ONVIF とエミュレーターの切り出し + WebRTC の遅れ。docs/webrtc.md)なので、「操作はおよそ 1 秒で映像に反映されます」と添える
 - タッチ端末(`pointer: coarse`)ではボタンを 44px にする
 
 ### H.265
