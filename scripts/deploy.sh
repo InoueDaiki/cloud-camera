@@ -26,7 +26,8 @@ aws_() { mise -C "$ROOT" exec -- aws "$@"; }
 echo "==> project: $PROJECT"
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
-  "$ROOT/scripts/build-all.sh"
+  # uv / node は mise で入れたものを使う(mise の外から呼ばれても動くように)
+  mise -C "$ROOT" exec -- "$ROOT/scripts/build-all.sh"
 fi
 
 tf init -input=false >/dev/null
