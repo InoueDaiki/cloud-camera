@@ -23,3 +23,5 @@ build/
 # 大きいメディア・モデル
 *.onnx
 emulator/media/*.mp4
+# Claude Code のワークツリー
+.claude/worktrees/
