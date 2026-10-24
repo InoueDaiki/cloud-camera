@@ -194,19 +194,25 @@ export function usePlayback(processedUntil: (cameraId: string) => number | null)
       });
       s.hls = hls;
       let started = false;
+      // マルチバリアントのプレイリスト(KVS)で、レベルを読むために先に startLoad(-1) したか
+      let kicked = false;
       const startAt = () => {
         if (started) return;
         started = true;
         if (s.pendingSeek !== null && s.frags.length) {
           const pos = mediaTimeFor(s, s.pendingSeek);
-          hls.startLoad(pos);
+          // 読み込み中に startLoad をやり直すと、最初の断片の読み込みが中断されたまま
+          // SourceBuffer が作られず止まる(KVS ON_DEMAND + H.265 の Chrome で確認)。
+          // すでに読み込みを始めていればシークで位置を合わせる
+          if (kicked) video.currentTime = pos;
+          else hls.startLoad(pos);
           s.pendingSeek = null;
           // 前のセッション(ライブなど)の currentTime が残って開始位置がずれることがあるので、
           // 最初の断片が入った時点でずれていれば合わせ直す
           hls.once(Hls.Events.FRAG_BUFFERED, () => {
             if (sessionRef.current?.id === s.id && Math.abs(video.currentTime - pos) > 2) video.currentTime = pos;
           });
-        } else {
+        } else if (!kicked) {
           hls.startLoad(-1);
         }
         video.playbackRate = rateRef.current;
@@ -229,7 +235,10 @@ export function usePlayback(processedUntil: (cameraId: string) => number | null)
         // メディアプレイリストなら直後に LEVEL_LOADED が来る。来なければマルチバリアント(KVS など)で、
         // 読み込みを始めないとレベルが読まれないので、いったん先頭から始める(位置は LEVEL_LOADED で合わせ直す)
         window.setTimeout(() => {
-          if (sessionRef.current?.id === s.id && !started && s.frags.length === 0) hls.startLoad(-1);
+          if (sessionRef.current?.id === s.id && !started && s.frags.length === 0) {
+            kicked = true;
+            hls.startLoad(-1);
+          }
         }, 0);
       });
       hls.on(Hls.Events.ERROR, (_e, d) => {
