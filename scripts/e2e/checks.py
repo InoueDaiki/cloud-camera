@@ -330,12 +330,15 @@ def stage_detect(a) -> str:
 
     def check():
         done = [s for s in _sections(t["state_table"], since) if s.get("detect_status") == "DONE"]
-        if done:
-            return done
-        raise Fail("detect_status=DONE の区間がない")
+        # 検出 0 件の区間では Parquet に行が入らないので、検出のある区間を待つ
+        hit = [s for s in done if int(s.get("detect_count", 0)) > 0]
+        if hit:
+            return done, hit
+        raise Fail(f"detect_status=DONE {len(done)} 件、検出のある区間なし "
+                   f"(detect_count={[int(s.get('detect_count', 0)) for s in done[:5]]})")
 
-    done = poll(check, a.timeout, 15, "detect_status=DONE の区間")
-    dt = parse_iso(done[0]["sk"]).strftime("%Y-%m-%d")
+    done, hit = poll(check, a.timeout, 15, "検出のある detect_status=DONE の区間")
+    dt = parse_iso(hit[0]["sk"]).strftime("%Y-%m-%d")
     key = f"detections/dt={dt}/{CAMERA}.parquet"
     head = boto3.client("s3").head_object(Bucket=t["detections_bucket"], Key=key)
     ath = boto3.client("athena")

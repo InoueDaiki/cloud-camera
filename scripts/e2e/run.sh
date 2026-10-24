@@ -88,6 +88,10 @@ build() {
     if [[ -f "$ROOT/build/.dummy-$n" ]]; then rm -f "$ROOT/build/$n.zip" "$ROOT/build/.dummy-$n"; fi
   done
   if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
+    # 物体検出のモデル(gitignore 済み)。用意済みなら何もしない
+    if [[ -f "$ROOT/lambdas/detector/fetch_models.sh" ]]; then
+      bash "$ROOT/lambdas/detector/fetch_models.sh" || return 1
+    fi
     "$ROOT/scripts/build-all.sh" || return 1
   fi
   for n in video_archiver detector api; do
@@ -117,7 +121,18 @@ provision() {
 }
 
 edge_up() {
-  "${COMPOSE[@]}" up -d --build --wait emulator && "${COMPOSE[@]}" up -d --build edge
+  "${COMPOSE[@]}" build emulator || return 1
+  # 物体検出で人や車が映るように、既定はサンプル動画(人の多い交差点)をループ再生する
+  local src="${E2E_SOURCE:-file:/media/crosswalk_toronto.mp4}"
+  if [[ "$src" == file:/media/* && ! -f "$ROOT/emulator/media/${src#file:/media/}" ]]; then
+    echo "サンプル動画を取得する"
+    docker run --rm -v "$ROOT/emulator/media:/media" cloud-camera/onvif-emulator:latest \
+      python /app/scripts/fetch_sample_media.py --out /media || return 1
+  fi
+  echo "映像: $src"
+  # edge の up でも emulator の設定が比べられるので、両方に渡す(片方だけだと作り直される)
+  export EMULATOR_SOURCE="$src"
+  "${COMPOSE[@]}" up -d --wait emulator && "${COMPOSE[@]}" up -d --build edge
 }
 
 edge_down() {
