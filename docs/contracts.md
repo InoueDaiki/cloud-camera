@@ -247,7 +247,7 @@ timeline のレスポンス:
 ## ONVIF エミュレーター
 
 - コンテナ 1 つで複数台を模擬できる(環境変数か設定ファイルでカメラ数を指定)
-- ONVIF: WS-Discovery(UDP 3702)、Device、Media(Profile S)、Media2(H.265 は Media2 で返す)。認証は WS-Security UsernameToken(Digest)
+- ONVIF: WS-Discovery(UDP 3702)、Device、Media(Profile S)、Media2(H.265 は Media2 で返す)、PTZ(下の「PTZ」節)。認証は WS-Security UsernameToken(Digest)
 - 既定のデバイスサービス URL: `http://<host>:8080/onvif/device_service`、既定の認証情報 `admin` / `admin`
   - カメラ n 台目は **ポートで分ける**: `http://<host>:{8080 + n - 1}/onvif/device_service`(cam1 = 8080、cam2 = 8081 …)。既定 2 台、カメラ名(ONVIF の name スコープと Hostname)は `cam-001` 形式
   - 認証なしで呼べるのは GetSystemDateAndTime、GetCapabilities、GetServices、GetServiceCapabilities、GetHostname、GetWsdlUrl、GetEndpointReference。誤った認証は SOAP Fault `env:Sender` / `ter:NotAuthorized`(HTTP 400)。PasswordText も受け付ける
@@ -255,6 +255,7 @@ timeline のレスポンス:
 - Media(ver10): Encoding に H265 がないため、`Profile_Main` は VideoEncoderConfiguration を持たない(GetStreamUri は使える)
 - RTSP: `rtsp://<host>:8554/cam{n}/main`(H.265)、`.../sub`(H.264、低解像度)。キーフレーム間隔 1 秒(設定可)、VBR。RTSP の認証は既定でなし(`EMULATOR_RTSP_AUTH=true` でカメラの認証情報が必要)
 - スナップショット: `http://<host>:{ONVIF ポート}/onvif/snapshot.jpg`(1 秒ごとに更新、認証なし)
+- RTSP はフレームごとに一定間隔で送る(1 秒ごとのまとめ送りにしない)
 - 映像ソース: 時刻を焼き込んだテストパターン(既定)か、ループ再生する動画ファイル。焼き込む時刻はフレーム生成時の UTC(ミリ秒)
 - Docker のブリッジネットワークでは、同じネットワークのコンテナからだけ WS-Discovery のマルチキャストが届く(Docker for Mac のホストからは届かない)
 
@@ -289,6 +290,15 @@ timeline のレスポンス:
 - 操作: GetNodes、GetNode、GetConfigurations、GetConfiguration、GetConfigurationOptions、GetStatus、ContinuousMove(Timeout 対応)、RelativeMove、AbsoluteMove、Stop、GetPresets、SetPreset、RemovePreset、GotoPreset、GotoHomePosition、SetHomePosition
 - 動きは速度上限付きで滑らかに(瞬間移動しない)。GetStatus の MoveStatus は `MOVING` / `IDLE`
 - 元映像は出力より高い解像度で作り(または読み)、切り出してから出力解像度に拡大縮小する。PTZ の操作で配信(RTSP)を途切れさせない。解像度とコーデックのパラメータは変えない(KVS の GetClip などはコーデック情報が変わるとエラーになるため)
+- 実装で決めた細部(エミュレーター):
+  - 倍率 = 1 + zoom × (最大倍率 − 1)(線形)。窓の大きさは元映像の 1/倍率、窓の左端 = (元映像の幅 − 窓の幅) × (pan + 1) / 2、上端 = (元映像の高さ − 窓の高さ) × (1 − tilt) / 2
+  - 速度 1(最大)の速さは既定で pan / tilt 0.5 単位/秒、zoom 0.5 単位/秒(カメラごとに設定可)。AbsoluteMove / RelativeMove / GotoPreset / GotoHomePosition の Speed は 0〜1(最大に対する割合、省略で 1)
+  - 範囲外の位置・速度・差分は Fault にせず丸める。ContinuousMove で端に着いたら止まる(`IDLE`)。ContinuousMove で省略した軸は変えない
+  - ContinuousMove の Timeout は 0.1〜600 秒に丸める。省略時は DefaultPTZTimeout(10 秒)
+  - トークンはノード `PTZNode_1`、構成 `PTZConfig_1`。プリセットは最大 32 個、トークンは空いている最小の番号(`"1"`、`"2"` …)、名前の省略時は `Preset {token}`。同じ名前は `ter:PresetExist`、ないトークンは `ter:NoToken`。状態(位置・プリセット・ホーム)はメモリ上だけ
+  - PTZ を無効にしたカメラ(`EMULATOR_CAM{n}_PTZ=false`)は GetServices / GetCapabilities に載せず、プロファイルに PTZConfiguration を付けない。PTZ の操作は `ter:ActionNotSupported` / `ter:PTZNotSupported`
+  - 焼き込みの 4 行目に現在の pan / tilt / zoom(と倍率)を出す。時刻とカメラ名は切り出しのあとに描くので常に見える
+  - 操作から RTSP の映像が変わるまで約 0.25 秒(受信側のデコードを含む。Mac の Docker で計測)
 
 ### MQTT
 

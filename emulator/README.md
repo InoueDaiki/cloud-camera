@@ -1,6 +1,6 @@
 # ONVIF カメラエミュレーター
 
-1 つのコンテナで複数台の ONVIF カメラ(Profile S + Media2)を模擬する。エッジゲートウェイの開発と、
+1 つのコンテナで複数台の ONVIF カメラ(Profile S + Media2 + 疑似 PTZ)を模擬する。エッジゲートウェイの開発と、
 クラウド側(KVS、録画、物体検出)の検証に使う。arm64(Raspberry Pi、Apple Silicon)と amd64 で動く。
 
 ```
@@ -11,6 +11,7 @@
 │  └ プロセス監視(再起動、ウォッチドッグ)         │
 │      ├ MediaMTX           :8554 RTSP(udp 8000/8001)│
 │      └ FFmpeg × 台数  testsrc / 動画ループ         │
+│          ├ 疑似 PTZ: 高解像度の元映像 → crop(zmq)│
 │          ├ main  H.265 libx265 → /cam{n}/main      │
 │          ├ sub   H.264 libx264 → /cam{n}/sub       │
 │          └ 1 秒ごとの JPEG(スナップショット)      │
@@ -28,6 +29,7 @@ EMULATOR_CAMERAS=4 docker compose -f emulator/compose.yaml up
 | --- | --- |
 | ONVIF デバイスサービス(n 台目) | `http://<host>:{8080+n-1}/onvif/device_service` |
 | Media / Media2 | `…/onvif/media_service`、`…/onvif/media2_service`(GetServices / GetCapabilities でも取れる) |
+| PTZ | `…/onvif/ptz_service`(同上) |
 | RTSP | `rtsp://<host>:8554/cam{n}/main`(H.265)、`rtsp://<host>:8554/cam{n}/sub`(H.264) |
 | スナップショット | `http://<host>:{8080+n-1}/onvif/snapshot.jpg` |
 | 状態(JSON) | `http://<host>:8080/healthz`(全カメラの FFmpeg の fps、再起動回数など) |
@@ -46,12 +48,15 @@ EMULATOR_CAMERAS=4 docker compose -f emulator/compose.yaml up
 | Device | GetDeviceInformation、GetSystemDateAndTime、SetSystemDateAndTime(受け付けるだけ)、GetCapabilities、GetServices、GetServiceCapabilities、GetScopes、GetHostname、GetNetworkInterfaces、GetNetworkProtocols、GetNetworkDefaultGateway、GetDNS、GetNTP、GetDiscoveryMode、GetUsers、GetRelayOutputs、GetWsdlUrl、GetEndpointReference |
 | Media(Profile S) | GetProfiles、GetProfile、GetStreamUri、GetSnapshotUri、GetVideoSources、GetVideoSourceConfiguration(s)、GetVideoEncoderConfiguration(s)、GetCompatibleVideoEncoderConfigurations、GetVideoEncoderConfigurationOptions、SetVideoEncoderConfiguration(sub のみ)、SetSynchronizationPoint、音声・メタデータ系は空で返す |
 | Media2 | GetProfiles、GetStreamUri、GetSnapshotUri、GetVideoEncoderConfigurations(main は `H265`)、GetVideoEncoderConfigurationOptions、GetVideoSourceConfigurations、SetVideoEncoderConfiguration、SetSynchronizationPoint、GetServiceCapabilities |
+| PTZ(ver20) | GetServiceCapabilities、GetNodes、GetNode、GetConfigurations、GetConfiguration、GetCompatibleConfigurations、GetConfigurationOptions、GetStatus、ContinuousMove、RelativeMove、AbsoluteMove、Stop、GetPresets、SetPreset、RemovePreset、GotoPreset、GotoHomePosition、SetHomePosition |
 
 - 認証は WS-Security UsernameToken(PasswordDigest と PasswordText)。ONVIF の PRE_AUTH(GetSystemDateAndTime、GetCapabilities、
   GetServices、GetServiceCapabilities、GetHostname、GetWsdlUrl、GetEndpointReference)は認証なしで応答する。
   誤った認証には SOAP 1.2 Fault `env:Sender` / `ter:NotAuthorized`(HTTP 400)、未実装の操作には `env:Receiver` / `ter:ActionNotSupported`。
 - Media2 の `GetProfiles` は仕様どおり、`Type`(`All`、`VideoEncoder` など)を指定したときだけ Configurations を返す。
 - Media(ver10)の Encoding には H265 がないため、H.265 の `Profile_Main` は VideoEncoderConfiguration を持たない(GetStreamUri は使える)。
+- PTZ の操作も同じ UsernameToken の認証が必要(PRE_AUTH なし)。Media の各プロファイルと、Media2 の `GetProfiles`(`Type` が `All` か `PTZ`)に
+  同じ PTZConfiguration(`PTZConfig_1`)が付く。
 - `SetVideoEncoderConfiguration` で変えられるのはビットレート上限、GovLength、フレームレート、Quality。変えると FFmpeg を再起動する
   (配信が数秒途切れる)。解像度とコーデックは固定で、変えようとすると `ter:InvalidArgVal` / `ter:ConfigModify`。設定はメモリ上だけで、コンテナを再起動すると戻る。
 
@@ -64,6 +69,101 @@ EMULATOR_CAMERAS=4 docker compose -f emulator/compose.yaml up
   まとめて出すので、桁ごとにずれない。遅延の計測は「受信側の時刻 − 焼き込まれた時刻」で行える(エンコードの遅延を含む)。
 - 動画ファイル: `-re -stream_loop -1` で実時間ループ再生。fps フィルターで CFR にそろえてから `setpts=N` で振り直すので、
   ループの継ぎ目でも出力の pts は単調増加し、途切れない(結合テストで確認)。解像度が違う動画は main の解像度に縮小して黒帯で埋める。
+
+## 疑似 PTZ
+
+光学 PTZ の代わりに、元映像から切り出す範囲(窓)を動かす(デジタル PTZ)。座標は ONVIF の Generic 空間
+(docs/contracts.md の「PTZ」節)。
+
+```
+元映像(main × 2、例 2560×1440)→ zmq → crop(窓)→ scale(main の解像度)→ 時刻・名前・PTZ の焼き込み → main / sub / スナップショット
+                                    ↑
+              PTZ の状態(Python): 操作のたびと、動いている間はフレームごとに送る
+```
+
+| 値 | 範囲 | 映像 |
+| --- | --- | --- |
+| pan | -1〜1 | 窓の水平位置(-1 左端、1 右端) |
+| tilt | -1〜1 | 窓の垂直位置(-1 下端、1 上端) |
+| zoom | 0〜1 | 倍率 = 1 + zoom × (最大倍率 − 1)。0 が全体(このときは pan / tilt を動かしても見た目は変わらない) |
+
+- 動き: 速度上限付きで等速に動く(瞬間移動しない)。ContinuousMove の速度 -1〜1、Absolute / Relative / GotoPreset / GotoHomePosition の
+  Speed 0〜1 は最大速度に対する割合。GetStatus の MoveStatus は `MOVING` / `IDLE`
+- ContinuousMove: Timeout(0.1〜600 秒に丸める。省略時 10 秒)で自動停止。省略した軸は変えない。端に着いたら止まる
+- 範囲外の位置・速度・差分は Fault にせず丸める(RelativeMove の pan / tilt は ±2 まで、zoom は ±1)
+- プリセット: 最大 32 個。トークンは `"1"`、`"2"` …(空いている最小の番号)。名前の重複は `ter:PresetExist`。
+  ホーム位置の既定は (0, 0, 0)、SetHomePosition で今の位置にする
+- 状態(位置、プリセット、ホーム)はカメラごとにメモリ上だけ。コンテナを再起動すると戻る。FFmpeg が再起動しても
+  (SetVideoEncoderConfiguration など)今の窓から始まる
+- main / sub / スナップショットは同じ窓。焼き込みの 4 行目に `PTZ pan … tilt … zoom … (倍率)` が出る(動いている間は `MOVING`)。
+  時刻とカメラ名は切り出しのあとに描くので、常に左上に見える
+- `/healthz` の `cameras.*.ptz` に位置、倍率、FFmpeg に送ったコマンド数とエラー数が出る
+
+### onvif-zeep での操作例
+
+```python
+from datetime import timedelta
+from onvif import ONVIFCamera
+
+cam = ONVIFCamera("127.0.0.1", 8080, "admin", "admin")
+ptz = cam.create_ptz_service()  # GetCapabilities の PTZ の XAddr を使う
+p = "Profile_Main"              # Profile_Sub でも同じ窓
+
+ptz.AbsoluteMove({"ProfileToken": p, "Position": {"PanTilt": {"x": 0.5, "y": -0.2}, "Zoom": {"x": 1}}})
+ptz.ContinuousMove({"ProfileToken": p, "Velocity": {"PanTilt": {"x": -1, "y": 0}, "Zoom": {"x": 0}},
+                    "Timeout": timedelta(seconds=2)})
+ptz.Stop({"ProfileToken": p})
+st = ptz.GetStatus({"ProfileToken": p})
+print(st.Position.PanTilt.x, st.Position.PanTilt.y, st.Position.Zoom.x, st.MoveStatus.PanTilt)
+token = ptz.SetPreset({"ProfileToken": p, "PresetName": "玄関"})
+ptz.GotoPreset({"ProfileToken": p, "PresetToken": token})
+ptz.GotoHomePosition({"ProfileToken": p})
+```
+
+ホスト側のポートをずらして起動しているときは、GetCapabilities の XAddr がコンテナ内のポート(8080)を指す(既存の仕様)。
+`cam.xaddrs["http://www.onvif.org/ver20/ptz/wsdl"]` を書き換えるか、同じ Docker ネットワークから呼ぶ。
+エッジの PTZ クライアント(MQTT なし)でも操作できる:
+
+```sh
+python3 -m cc_edge.ptz http://emulator:8080/onvif/device_service '{"op":"absolute","pan":0.5,"zoom":1}' '{"sleep":3}' '{"op":"home"}'
+```
+
+### 映像の仕組みと選んだ理由
+
+FFmpeg の `zmq` フィルター(Debian の FFmpeg 7.1 は libzmq 付き)で、`crop` に実行中のコマンドを送る。Python 側は
+pyzmq の DEALER ソケットで UNIX ドメインソケット(`{runtime_dir}/cam{n}.ptz.sock`。ホストのポートと衝突しない)に送る。
+
+- crop の式は `w=iw/倍率`、`h=ow*高さ/幅`、`x=(in_w-out_w)*fx`、`y=(in_h-out_h)*fy`。ズームは `w` のコマンド 1 つで `h` も変わる
+  (縦横比が崩れない)。`x` / `y` はフレームごとに評価されるので、倍率が変わっても位置の比率が保たれる
+- 動いている間はフレーム間隔ごと、止まっていれば 1 秒ごと(FFmpeg の再起動に備えた再送。値が同じなら映像は変わらない)に送る
+- crop と scale の間に `null` を挟む。FFmpeg 7.1 は crop と scale を直結すると、コマンドで crop の出力サイズを変えた直後から
+  フレームが流れなくなる
+- 出力の解像度・コーデック・GOP は変わらず、FFmpeg も再起動しないので配信は途切れない
+- スナップショットの間引きは出力側の `-r 1` で行う。フィルターの中で `fps=1` にすると、FFmpeg 7.1 はフィルターグラフを
+  いちばん出力の少ない出口に合わせて回すため、main / sub が 1 秒ごとにまとめて送り出されていた(PTZ を入れる前からの挙動。
+  RTSP がバースト到着になり、映像への反映が最大 1 秒ぶれていた)
+
+ほかの方式との比較: Python でフレームを受け取って切り出す方式(FFmpeg 2 本 + rawvideo のパイプ)は、高解像度の生フレームを
+毎秒数百 MB コピーするので Raspberry Pi では重い。`sendcmd` は起動時に決めた時刻のコマンドしか送れない。`zmq` なら追加の
+コピーがなく、操作から 1 フレーム以内にフィルターへ届く。
+
+計測(Mac / Apple Silicon の Docker、2 台、1280×720・15fps、`ultrafast`):
+
+| 条件 | CPU(コンテナ全体) |
+| --- | --- |
+| PTZ 無効 | 約 62% |
+| PTZ 有効、元映像 1 倍(`EMULATOR_PTZ_SOURCE_SCALE=1`、ズームは拡大のみ) | 約 62% |
+| PTZ 有効、元映像 2 倍(既定)、止まっている | 約 118% |
+| 同上、1 台を動かし続ける | 約 171% |
+| PTZ 有効、元映像 3 倍、止まっている | 約 158% |
+
+増えるのは高解像度の元映像の生成(testsrc は RGB で作るので YUV への変換も)と縮小で、切り出しとコマンドはほぼ無視できる。
+動かしている間は画面全体が動くので、エンコードの負荷も上がる。Raspberry Pi では `EMULATOR_PTZ_SOURCE_SCALE=1`
+(ズームするとぼやける)から試す。
+
+操作から映像に反映されるまで: SOAP の送信から、変化したフレームが RTSP(sub)で届くまで中央値 0.24 秒(0.21〜0.28 秒、10 回。
+受信側のデコードを含む)。エッジの CLI(`python3 -m cc_edge.ptz`)では、ONVIF の命令が返ってから約 0.26 秒(プロセスの起動と
+準備を含めて約 0.33 秒)。
 
 ## 設定
 
@@ -91,9 +191,15 @@ EMULATOR_CAMERAS=4 docker compose -f emulator/compose.yaml up
 | `EMULATOR_QUALITY` | 60 | ONVIF の Quality(0〜100、CRF 40〜20 に変換) |
 | `EMULATOR_SUB_WIDTH` / `EMULATOR_SUB_HEIGHT` / `EMULATOR_SUB_BITRATE_KBPS` | 640 / 360 / 384 | sub の設定 |
 | `EMULATOR_PRESET` | ultrafast | x264 / x265 の preset |
+| `EMULATOR_PTZ` | true | 疑似 PTZ を有効にする(false で PTZ サービスを出さず、映像も PTZ なしの構成) |
+| `EMULATOR_PTZ_MAX_ZOOM` | 4 | zoom = 1 のときの倍率(1〜16) |
+| `EMULATOR_PTZ_PAN_TILT_SPEED` | 0.5 | 速度 1 のときの pan / tilt の速さ(単位 / 秒。-1→1 に 4 秒) |
+| `EMULATOR_PTZ_ZOOM_SPEED` | 0.5 | 速度 1 のときの zoom の速さ(単位 / 秒。0→1 に 2 秒) |
+| `EMULATOR_PTZ_SOURCE_SCALE` | 2 | テストパターンの元映像を main の何倍で作るか(1〜4)。動画ファイルは元の解像度(main の縦横比に黒帯で合わせ、main より小さければ main の大きさ) |
 | `EMULATOR_NAME`、`EMULATOR_MANUFACTURER`、`EMULATOR_MODEL`、`EMULATOR_FIRMWARE`、`EMULATOR_LOCATION` | | 機器情報(名前はカメラ別のみ。既定 `cam-001` …) |
 
-カメラ別は `EMULATOR_CAM2_SOURCE=file:/media/traffic_bangkok.mp4` のように `EMULATOR_CAM{n}_` を付ける(`_ONVIF_PORT` も可)。
+カメラ別は `EMULATOR_CAM2_SOURCE=file:/media/traffic_bangkok.mp4` のように `EMULATOR_CAM{n}_` を付ける(`_ONVIF_PORT`、`_PTZ` なども可)。
+YAML のキーは小文字(`ptz`、`ptz_max_zoom` など)。
 
 ## サンプル動画(物体検出の検証用)
 
@@ -136,8 +242,11 @@ cd emulator && mise exec -- uv run pytest
 | `test_onvif.py` | Discovery(全台、EPR がカメラごとに別)→ 認証 → GetDeviceInformation → Media2 で H.265 プロファイル → GetStreamUri の一連の流れ、誤パスワード・誤ユーザーの拒否(Digest / Text)、Fault の形式、PRE_AUTH、Device / Media1 の各操作、strict な zeep での Media2 スキーマ検証 |
 | `test_media.py` | ffprobe で main が hevc・指定解像度、sub が h264・低解像度、キーフレーム間隔が設定どおり、pts が単調増加、スナップショット、Media2 の SetVideoEncoderConfiguration で GOP が 2 秒に変わること、動画ループの連続性、全プロセスの健全性 |
 | `test_units.py` | 設定の優先順位、UsernameToken の検証、FFmpeg / MediaMTX の設定生成 |
+| `test_ptz.py` | onvif-zeep で PTZ の全操作、GetCapabilities / GetServices / Media / Media2 のプロファイル、速度上限付きの滑らかな移動、Timeout での自動停止、Stop、範囲の丸め、プリセット、ホーム、認証、公式 WSDL と strict な zeep でのスキーマ検証 |
+| `test_ptz_units.py` | 動きのシミュレーション(時計を差し替え)、切り出し窓、FFmpeg のコマンド、設定、PTZ 無効のカメラ |
+| `test_ptz_media.py` | PTZ で RTSP の映像が変わること(main / sub / スナップショットが同じ窓)、動かしている間も pts が単調・途切れない・キーフレーム間隔と解像度・コーデックが変わらない・FFmpeg が再起動しない、操作から映像反映までの遅延(`PTZ_SHOTS_DIR` を指定するとフレームの PNG と `ptz_latency.json` を書き出す) |
 
-`tests/wsdl/` は ONVIF 公式(github.com/onvif/specs 26.06)の Media2 WSDL と onvif.xsd に、W3C / OASIS の補助スキーマを加えて
+`tests/wsdl/` は ONVIF 公式(github.com/onvif/specs 26.06)の Media2 / PTZ WSDL と onvif.xsd に、W3C / OASIS の補助スキーマを加えて
 外部参照をローカルに書き換えたもの([scripts/vendor_wsdl.sh](scripts/vendor_wsdl.sh) で再生成できる)。onvif-zeep 同梱の WSDL には
 Media2 がないため、Media2 を使うクライアント(エッジなど)はこの WSDL を `ONVIFService(xaddr, user, pass, ".../ver20/media/wsdl/media.wsdl",
 binding_name="{http://www.onvif.org/ver20/media/wsdl}Media2Binding")` のように使える(`tests/onvif_helpers.py` の `media2()` を参照)。
@@ -157,12 +266,15 @@ binding_name="{http://www.onvif.org/ver20/media/wsdl}Media2Binding")` のよう�
 
 ソフトウェアエンコード(libx265)は重い。Raspberry Pi 4 での性能は未計測。1 台・1280×720・15fps・`ultrafast` から試し、
 `/healthz` の `speed` が 1.0x を下回る(実時間に追いつかない)ときは台数・解像度・fps を下げる。Mac(Apple Silicon)では
-1280×720・15fps × 2 台で CPU 0.6 コア程度。
+1280×720・15fps × 2 台で CPU 0.6 コア程度(PTZ 無効)、既定の疑似 PTZ(元映像 2 倍)で 1.2 コア程度(「疑似 PTZ」の計測)。
 
 ## 既知の制約
 
 - 1 台ごとに ONVIF のポートを分けている(onvif-zeep などはデバイスサービスのパスを `/onvif/device_service` 固定で組み立てるため)。
-- Events、PTZ、Imaging、音声、マルチキャスト配信、HTTPS、HTTP Digest 認証は未実装。
+- Events、Imaging、音声、マルチキャスト配信、HTTPS、HTTP Digest 認証は未実装。
+- PTZ は Generic 空間だけ(度などの絶対座標の空間、プリセットツアー、PTZ の SetConfiguration、Media の Add/RemovePTZConfiguration はない)。
+  プリセットとホームは保存しない。焼き込みの 4 行目はテキストファイルを毎フレーム読み直すので、窓より 1 フレーム遅れることがある。
+- 疑似 PTZ のズームが鮮明なのは元映像の倍率まで(既定の 2 倍なら 2 倍ズームまで。それ以上は拡大でぼやける)。
 - 時刻はコンテナ(ホスト)の時計そのまま。SetSystemDateAndTime は受け付けるが何もしない。
 - UsernameToken の Nonce の再利用(リプレイ)は検査しない。
 - スナップショットは認証なし。
@@ -176,6 +288,9 @@ binding_name="{http://www.onvif.org/ver20/media/wsdl}Media2Binding")` のよう�
 | `src/onvif_emulator/config.py` | 設定(YAML + 環境変数) |
 | `src/onvif_emulator/soap.py` | SOAP エンベロープ、Fault、UsernameToken の検証 |
 | `src/onvif_emulator/services.py` | Device / Media / Media2 の操作(手書きの XML テンプレート) |
+| `src/onvif_emulator/ptz.py` | 疑似 PTZ の状態と動きのシミュレーション(プリセット、ホーム、Timeout) |
+| `src/onvif_emulator/ptz_service.py` | ONVIF PTZ サービスの操作 |
+| `src/onvif_emulator/ptz_link.py` | PTZ の状態を FFmpeg(zmq → crop)と焼き込みに反映するループ |
 | `src/onvif_emulator/discovery.py` | WS-Discovery |
 | `src/onvif_emulator/streams.py` | MediaMTX の設定、FFmpeg のコマンド |
 | `src/onvif_emulator/supervisor.py` | 子プロセスの監視と再起動 |
