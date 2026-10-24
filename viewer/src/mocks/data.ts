@@ -1,7 +1,7 @@
 // モックのデータ。現在時刻から逆算して、それらしい録画の隙間、FAILED、未退避(KVS)の区間を作る。
 // 同じ時刻には常に同じ結果を返す(乱数は時刻とカメラから決める)。
 
-import type { CameraRaw, RecordedRange, TimelineResponse, TimeRange } from '../api/types';
+import type { CameraRaw, RecordedRange, TimelineResponse, TimeRange, WebRtcSessionInfo } from '../api/types';
 import { DAY, floorTo, HOUR, jstDayStartOf, MINUTE, SECOND } from '../lib/time';
 import { mockPtzState } from './ptz';
 
@@ -19,12 +19,15 @@ interface MockCamera {
   /** この分だけ前にオフラインになった(null ならオンライン) */
   offlineMinutesAgo: number | null;
   streaming: boolean;
+  /** KVS WebRTC のライブ(false なら desired で止めている。ビューワーは HLS で見る) */
+  webrtc: boolean;
 }
 
 const cameras: MockCamera[] = [
-  { camera_id: 'cam-001', name: '玄関', gateway_id: 'gw-001', lagMinutes: 2, offlineMinutesAgo: null, streaming: true },
-  { camera_id: 'cam-002', name: '駐車場', gateway_id: 'gw-001', lagMinutes: 14, offlineMinutesAgo: null, streaming: true },
-  { camera_id: 'cam-003', name: '倉庫', gateway_id: 'gw-002', lagMinutes: 2, offlineMinutesAgo: 40, streaming: false },
+  { camera_id: 'cam-001', name: '玄関', gateway_id: 'gw-001', lagMinutes: 2, offlineMinutesAgo: null, streaming: true, webrtc: true },
+  // 駐車場は WebRTC を止めている(HLS で見る。PTZ は WebRTC のときだけなので無効になる)
+  { camera_id: 'cam-002', name: '駐車場', gateway_id: 'gw-001', lagMinutes: 14, offlineMinutesAgo: null, streaming: true, webrtc: false },
+  { camera_id: 'cam-003', name: '倉庫', gateway_id: 'gw-002', lagMinutes: 2, offlineMinutesAgo: 40, streaming: false, webrtc: true },
 ];
 
 /** 配信の開始・停止の指示(PUT /streaming)をモックの中で覚えておく */
@@ -115,6 +118,7 @@ export function mockCameras(now: number): CameraRaw[] {
         resolution: '1920x1080',
         error: off === null ? null : 'ゲートウェイからの応答がありません(LWT 受信)',
         ptz: mockPtzState(c.camera_id, now),
+        webrtc: mockWebRtcReported(c, now),
       },
       desired: {
         name: c.name,
@@ -122,6 +126,7 @@ export function mockCameras(now: number): CameraRaw[] {
         username: 'admin',
         password: '***',
         profile_token: null,
+        ...(c.webrtc ? {} : { webrtc: { enabled: false } }),
         ...(codecs.has(c.camera_id) ? { codec: codecs.get(c.camera_id)!.want } : {}),
       },
       reported_at: iso(off ?? now - 12 * SECOND),
@@ -129,6 +134,45 @@ export function mockCameras(now: number): CameraRaw[] {
       detect_processed_until: iso(processedUntil(c, now) - MINUTE),
     };
   });
+}
+
+function webrtcCodecs(cameraId: string, now: number): string[] {
+  // main が H.265 なら H.265(main)と H.264(sub)、H.264 に切り替えたカメラは H.264 だけ
+  return mockCodec(cameraId, now) === 'H265' ? ['H265', 'H264'] : ['H264'];
+}
+
+function mockWebRtcReported(c: MockCamera, now: number) {
+  const live = offlineAt(c, now) === null && (desired.get(c.camera_id) ?? false);
+  const state = !c.webrtc || !live ? 'DISABLED' : 'CONNECTED';
+  return { enabled: c.webrtc, channel: `cloud-camera-${c.camera_id}`, state, codecs: state === 'CONNECTED' ? webrtcCodecs(c.camera_id, now) : [], viewers: 0 };
+}
+
+/** GET /api/cameras/{id}/webrtc。見られないカメラは API と同じ 409 */
+export function mockWebRtc(
+  cameraId: string,
+  now: number,
+): WebRtcSessionInfo | { status: number; error: { code: string; message: string } } {
+  const c = cameras[camIndex(cameraId)];
+  if (!c) return { status: 404, error: { code: 'CAMERA_NOT_FOUND', message: 'カメラがありません' } };
+  if (!c.webrtc) return { status: 409, error: { code: 'WEBRTC_DISABLED', message: 'このカメラは WebRTC のライブを止めています' } };
+  if (offlineAt(c, now) !== null) return { status: 409, error: { code: 'CAMERA_OFFLINE', message: 'カメラ(ゲートウェイ)がオフラインです' } };
+  if (!(desired.get(c.camera_id) ?? false)) {
+    return { status: 409, error: { code: 'WEBRTC_UNAVAILABLE', message: 'エッジの WebRTC が待ち受けていません(state=DISABLED)' } };
+  }
+  const clientId = `viewer-${Math.random().toString(16).slice(2, 14)}`;
+  return {
+    camera_id: c.camera_id,
+    channel_name: `cloud-camera-${c.camera_id}`,
+    channel_arn: `arn:aws:kinesisvideo:ap-northeast-1:000000000000:channel/cloud-camera-${c.camera_id}/0`,
+    region: 'ap-northeast-1',
+    client_id: clientId,
+    wss_endpoint: 'wss://mock.invalid',
+    wss_url: 'wss://mock.invalid/?X-Amz-Signature=mock',
+    ice_servers: [],
+    codecs: webrtcCodecs(c.camera_id, now),
+    expires_at: iso(now + 299 * SECOND),
+    mock: true,
+  };
 }
 
 // 映像形式の指示(desired の codec)。エッジの切り替えを模して、指示から 4 秒後に reported が変わる

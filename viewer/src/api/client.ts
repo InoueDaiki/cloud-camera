@@ -9,6 +9,7 @@ import type {
   PtzState,
   SearchResponse,
   TimelineResponse,
+  WebRtcSessionInfo,
 } from './types';
 
 // 本番は CloudFront の同一オリジンから配信されるので、API は相対パスで呼ぶ。
@@ -16,9 +17,11 @@ const API = '/api';
 
 export class ApiError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  readonly code: string | null;
+  constructor(status: number, message: string, code: string | null = null) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -29,15 +32,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
+    let code: string | null = null;
     try {
       // API のエラーは {"error": {"code", "message"}}
       const body = (await res.json()) as { message?: string; error?: string | { code?: string; message?: string } };
       const err = body.error;
       message = (typeof err === 'object' ? err?.message : err) ?? body.message ?? message;
+      code = (typeof err === 'object' ? err?.code : null) ?? null;
     } catch {
       // 本文が JSON でなければステータスだけ出す
     }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, code);
   }
   return (await res.json()) as T;
 }
@@ -100,6 +105,9 @@ export const api = {
     if (toMs !== undefined) q.set('to', iso(toMs));
     return request<KvsHlsResponse>(`/cameras/${encodeURIComponent(cameraId)}/kvs-hls?${q}`);
   },
+
+  /** KVS WebRTC の視聴情報(署名付き WSS URL と ICE サーバー)。WebRTC で見られないカメラは 409 */
+  webrtc: (cameraId: string) => request<WebRtcSessionInfo>(`/cameras/${encodeURIComponent(cameraId)}/webrtc`),
 
   /** S3 に退避済みの区間を連結した HLS プレイリストの URL(取得は hls.js / Safari が行う) */
   vodUrl: (cameraId: string, fromMs: number, toMs: number) =>

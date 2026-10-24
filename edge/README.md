@@ -20,6 +20,8 @@ Raspberry Pi 4(linux/arm64)向けで、Mac(Apple Silicon の Docker)でもその
 | `agent/cc_edge/onvif.py` | 標準ライブラリだけの ONVIF クライアント。WS-Discovery、WS-Security Digest、Media2 で H.265 を自動選択(`prefer_codec` で H.264 優先にも)、GetStreamUri |
 | `agent/cc_edge/ptz.py` | PTZ。ONVIF PTZ クライアント(GetServices で XAddr、プロファイルの PTZConfiguration、各操作)、cmd `ptz` の処理、`{p}/{gw}/ptz` への結果、シャドウの `reported.cameras.{id}.ptz` |
 | `agent/cc_edge/pipeline.py` | パイプラインの仕様と、子プロセスの監視・バックオフ付き再起動 |
+| `agent/cc_edge/webrtc.py` | KVS WebRTC のライブ。カメラごとに master(`ccWebrtcMaster`、[webrtc/](webrtc/))を子プロセスで起動・監視し、reported と status に視聴者数と送信量を載せる |
+| `webrtc/src/cc_webrtc_master.c` | WebRTC の master(C SDK v1.20.0)。視聴者ごとに main(H.265)か sub(H.264)を再エンコードせずに流す |
 | `agent/cc_edge/runner.py` | 1 カメラ = 1 子プロセス。GStreamer を GI で組み、送信バイト数、GOP、KVS の ACK(永続化までの遅れ)を計測して JSON 行で親に渡す |
 | `scripts/tmp-aws.sh` | Terraform を使わずに実 AWS で試すための一時リソース(既定 `cc-tmp-edge-*`、`TMP_PROJECT` で変更)の作成・削除 |
 | `scripts/outage-test.sh`、`scripts/outage/` | 回線断試験(エッジから AWS への通信だけを iptables で遮断し、復旧後の ListFragments を集計) |
@@ -48,6 +50,11 @@ Raspberry Pi 4(linux/arm64)向けで、Mac(Apple Silicon の Docker)でもその
 | `CC_KVS_CONNECTION_STALENESS_S` / `CC_KVS_REPLAY_S` | `30` / `0`(= `CC_KVS_BUFFER_S`) | ACK が途絶えて接続を張り直すまでの秒数 / 張り直したときに巻き戻して送り直す最大の秒数 |
 | `CC_KVS_FRAMERATE` | `0`(30 とみなす) | kvssink の framerate。バッファの枠(フレーム数)= framerate × `CC_KVS_BUFFER_S` なので実際の fps 以上にする |
 | `CC_KVS_RETENTION_HOURS` | `1` | ストリームを自動作成するときの保持期間 |
+| `CC_WEBRTC` | `true` | `false` で KVS WebRTC の master を動かさない(カメラごとの有効・無効はシャドウの `webrtc.enabled`) |
+| `CC_WEBRTC_CHANNEL_PREFIX` | `{p}-` | シグナリングチャネル名の接頭辞(config.json の `webrtc_channel_prefix`) |
+| `CC_WEBRTC_IDLE_STOP_S` | `10` | 視聴者が 0 人になってから RTSP を閉じるまでの秒数 |
+| `CC_WEBRTC_ICE_TRANSPORT_POLICY` | `all` | `relay` で TURN を強制(検証用) |
+| `CC_WEBRTC_LOG_LEVEL` / `CC_WEBRTC_BIN` | `3` / `/opt/kvs/webrtc/bin/ccWebrtcMaster` | SDK のログ(1 verbose 〜 4 warn)/ master のパス |
 | `CC_LOG_LEVEL` | `INFO` | `DEBUG` で 5 秒ごとの計測値も出る。kvssink 自体のログは `/opt/kvs/kvs_log_configuration`(既定 WARN) |
 
 ## Mac で動かす(リポジトリ直下で)
@@ -106,6 +113,19 @@ docker compose exec edge python3 -m cc_edge.ptz http://emulator:8080/onvif/devic
 実 AWS での確認(2026-10-24、`TMP_PROJECT=cc-tmp-ptz edge/scripts/tmp-aws.sh up` の Thing、エッジはローカル実行、カメラは契約どおりのスタブ):
 API(`POST .../ptz`、202 まで約 50 ms)→ IoT Core → エッジ → ONVIF → シャドウ → `GET .../ptz` で新しい位置が見えるまで中央値約 250 ms。
 映像への反映はこれに KVS の LIVE HLS の遅れ(数秒)が加わる。
+
+## KVS WebRTC のライブ
+
+契約は [docs/contracts.md](../docs/contracts.md)(シャドウと status の `webrtc`)、調査と計測は [docs/webrtc.md](../docs/webrtc.md)、master の中身は [webrtc/README.md](webrtc/README.md)。
+
+- カメラごとに master を 1 プロセス(1 カメラ = 1 シグナリングチャネル `{p}-{camera_id}`)。シャドウの `streaming` と `webrtc.enabled`(省略時 true)が両方 true のとき動かす。
+  `webrtc.enabled` だけの変更では録画のパイプラインに触らない
+- 認証は kvssink と同じ証明書とロールエイリアス(IoT 認証情報プロバイダー)。master のバイナリか IoT の設定がなければ `UNAVAILABLE`(ドライラン)
+- RTSP: main は録画側が ONVIF で解決したもの、sub は main 以外の H.264 のプロファイルの GetStreamUri。視聴者がいるストリームだけ別の接続で読む。
+  録画側が URL やコーデックを取り直したら(カメラの再起動、映像形式の切り替え)master を起動し直す
+- 監視: 子プロセスが終了したらバックオフ(`CC_BACKOFF_INITIAL` / `CC_BACKOFF_MAX`、30 秒以上動けば初期値に戻す)して起動し直す。
+  回線断ではシグナリングが切れて `RECONNECTING` になり、SDK がつなぎ直す(プロセスは落とさない)。録画とは別プロセスなので、kvssink のバッファや再送には影響しない
+- 送信量は視聴者数に比例する(映像のビットレート × 視聴者数 × 約 1.15)。status の `webrtc.sent_kbps` で見られる
 
 ## 回線断とバッファ
 

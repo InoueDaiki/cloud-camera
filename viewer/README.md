@@ -14,7 +14,7 @@ React + TypeScript + Vite。UI は [Mantine](https://mantine.dev/)、再生は [
 
 | 時刻 | 再生元 |
 | --- | --- |
-| ライブ(現在から 15 秒以内を含む) | `GET /api/cameras/{id}/kvs-hls?mode=LIVE` |
+| ライブ(現在から 15 秒以内を含む) | KVS WebRTC(`GET /api/cameras/{id}/webrtc`)。つながらなければ `GET /api/cameras/{id}/kvs-hls?mode=LIVE` |
 | `video_processed_until` 以後 | `GET /api/cameras/{id}/kvs-hls?mode=ON_DEMAND&from=&to=`(分の頭から現在まで) |
 | `video_processed_until` より前 | `GET /api/cameras/{id}/vod.m3u8?from=&to=`(時の境界で 1 時間ずつ) |
 
@@ -28,10 +28,26 @@ React + TypeScript + Vite。UI は [Mantine](https://mantine.dev/)、再生は [
 - ホバー(スマホはドラッグ中)で `sprite.jpg` の該当秒のコマを CSS で切り出して表示(`src/lib/sprite.ts`)
 - 録画がない時刻をクリックすると次の録画から再生する。矢印キーで 10 秒(Shift で 1 分)送る
 
+### ライブ(KVS WebRTC と HLS)
+
+ライブは KVS WebRTC(1 秒未満の遅れ)を先に試し、だめなら KVS の HLS(数秒遅れ)に切り替える(`src/player/webrtcLive.ts`、純粋なロジックは `src/lib/webrtc.ts`)。
+
+- API(`GET .../webrtc`)が返す署名付き WSS URL と ICE サーバーで、KVS の JS SDK(`amazon-kinesis-video-streams-webrtc` 2.9.0、版を固定)の
+  `SignalingClient` につなぐ。署名は API が済ませているので、SDK には URL を返すだけの `requestSigner` を渡す(ブラウザに AWS の認証情報はない)。
+  SDK はブラウザ向けのバンドル(`dist/kvs-webrtc.min.js`)をライブのときだけ読み込む
+- コーデック: `RTCRtpReceiver.getCapabilities('video')` に H.265 があり、エッジが H.265 を出せる(API の `codecs`)なら
+  `setCodecPreferences` で H.265 → H.264 → 再送の順、なければ H.264 だけ。エッジは並びを見て main(H.265)か sub(H.264)を流す
+- HLS に切り替える条件: API が 409(WebRTC を止めている、オフライン、エッジの master が待ち受けていない)、最初の映像が 10 秒以内に出ない、
+  ICE が 5 秒以上 failed / disconnected のまま。再生中に切れた・映像が 8 秒止まったときは開き直す(WebRTC をもう一度試し、だめなら HLS)
+- 映像の右上の再生元に「ライブ │ WebRTC · H.265」「ライブ │ HLS · H.265」と小さく出す(マウスを乗せると、TURN 経由か、HLS に切り替えた理由)
+- 検証用の URL の引数: `?live=hls`(WebRTC を使わない)、`?live=h264`(WebRTC で H.264 だけ)
+- モック(`dev:mock`)では API が `mock: true` を返し、同じページ内の疑似 master(`src/mocks/rtcMaster.ts`。canvas のテストパターン)につなぐ。
+  玄関は WebRTC、駐車場は WebRTC を止めているので HLS になる
+
 ### PTZ
 
 シャドウの `reported.ptz.supported` が true のカメラだけ、操作ボタン(コントロール列の十字矢印)とパネル(映像の下)を出す。
-ライブ再生中だけ操作でき、録画の再生中はパネルを隠してボタンを無効にする(`src/player/PtzPanel.tsx`、ロジックは `src/lib/ptz.ts`)。
+**WebRTC の**ライブ再生中だけ操作でき、録画と HLS のライブの再生中はパネルを隠してボタンを無効にする(HLS は数秒遅れて操作感が悪いため。`src/player/PtzPanel.tsx`、ロジックは `src/lib/ptz.ts`)。
 
 - 方向パッドとズーム(+ / −): 押している間 `continuous`(速度 0.5、`timeout_ms` 4 秒を 2.5 秒ごとに送り直す)、
   離したとき・ポインタが外れたとき・タブが非表示になったとき・ウィンドウのフォーカスが外れたとき・パネルが消えるときに `stop`。
@@ -41,7 +57,7 @@ React + TypeScript + Vite。UI は [Mantine](https://mantine.dev/)、再生は [
 - 命令は 1 つずつ順に送る(前の 202 を待つ)。待っている間の continuous / stop は最後の 1 つだけ送る
 - 現在の位置は `GET .../ptz`。操作中(と操作後 6 秒)は 0.7 秒、それ以外は 10 秒ごとに取り直す。
   ミニマップは最大倍率 4 倍(エミュレーターの既定)を仮定した目安
-- ライブの HLS は数秒遅れるので、「操作は数秒後に映像に反映されます」と添える
+- 操作から映像の変化まで WebRTC で約 1 秒(API → IoT Core → エッジ → ONVIF とエミュレーターの切り出し + WebRTC の遅れ)なので、「操作はおよそ 1 秒で映像に反映されます」と添える
 - タッチ端末(`pointer: coarse`)ではボタンを 44px にする
 
 ### H.265

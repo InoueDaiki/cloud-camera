@@ -60,6 +60,17 @@
   background: var(--cc-video-overlay);
   font-size: var(--mantine-font-size-xs);
   white-space: nowrap;
+  /* 説明(title)を出せるように、オーバーレイの中でここだけ反応させる */
+  pointer-events: auto;
+}
+
+/* ライブの方式とコーデック(WebRTC · H.265 など)。控えめに */
+.transport {
+  padding-left: 6px;
+  margin-left: 2px;
+  border-left: 1px solid rgba(255, 255, 255, 0.35);
+  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
 }
 
 .liveDot {

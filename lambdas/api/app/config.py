@@ -34,6 +34,11 @@ class Config:
     media_url_prefix: str = "/media/"
     # カメラ ID → 表示名(検索のプロンプト用)。未設定ならシャドウの name を使う
     camera_names: dict[str, str] = field(default_factory=dict)
+    # KVS WebRTC のシグナリングチャネル名の接頭辞(チャネル名 = 接頭辞 + カメラ ID)。未設定ならストリームと同じ
+    webrtc_channel_prefix: str = ""
+
+    def channel_name(self, camera_id: str) -> str:
+        return f"{self.webrtc_channel_prefix or self.stream_name_prefix}{camera_id}"
 
     def stream_name(self, camera_id: str) -> str:
         return f"{self.stream_name_prefix}{camera_id}"
@@ -76,4 +81,5 @@ def load() -> Config:
         cameras={str(k): str(v) for k, v in cameras.items()},
         media_url_prefix=env.get("MEDIA_URL_PREFIX", "/media/"),
         camera_names={str(k): str(v) for k, v in names.items() if v},
+        webrtc_channel_prefix=env.get("WEBRTC_CHANNEL_PREFIX", ""),
     )

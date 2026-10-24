@@ -7,6 +7,7 @@ import {
   mockPlaylist,
   mockSearch,
   mockTimeline,
+  mockWebRtc,
   setDesiredCodec,
   setDesiredStreaming,
 } from './data';
@@ -42,6 +43,13 @@ export const handlers = [
       return HttpResponse.json({ error: { code: 'CAMERA_NOT_FOUND', message: 'カメラがありません' } }, { status: 404 });
     }
     return HttpResponse.json({ camera_id: params.id, codec: body.codec, version: 1 });
+  }),
+
+  // KVS WebRTC の視聴情報。モックではブラウザ内の疑似 master(src/mocks/rtcMaster.ts)につなぐ
+  http.get('/api/cameras/:id/webrtc', async ({ params }) => {
+    await delay(120);
+    const res = mockWebRtc(String(params.id), Date.now());
+    return 'error' in res ? HttpResponse.json(res, { status: res.status }) : HttpResponse.json(res);
   }),
 
   http.get('/api/cameras/:id/ptz', async ({ params }) => {

@@ -152,6 +152,10 @@ browser_check() { # ブラウザ
     fi
   fi
   # PTZ は焼き込みの文字を canvas で読むので、MSE(hls.js)で再生する Chrome だけ(ネイティブ HLS の映像は canvas に描くと汚染される)
+  # ライブの方式: WebRTC(H.265 / H.264)と HLS への切り替え。WebKit(Safari 相当)は H.265 と HLS だけ
+  if [[ "${E2E_WEBRTC:-1}" == "1" ]]; then
+    if [[ "$b" == webkit ]]; then modes="$modes,webrtc-h265,hls-fallback"; else modes="$modes,webrtc-h265,webrtc-h264,hls-fallback"; fi
+  fi
   [[ "$b" == chrome && "${E2E_PTZ:-1}" == "1" ]] && modes="$modes,ptz"
   echo "==> browser-$b ($modes)"
   local t0=$(date +%s) url
@@ -167,8 +171,10 @@ browser_check() { # ブラウザ
     got=1
     local j="${line#RESULT }" mode ok detail
     mode="$(jq -r .mode <<<"$j")"; ok="$(jq -r .ok <<<"$j")"
-    if [[ "$mode" == ptz ]]; then
-      detail="$(jq -r '"zoom \(.zoom // "-")、POST \(.post_ms // "-")ms、GET .../ptz に反映 \(.api_ms // "未反映")ms、焼き込み 4 行目が変わるまで \(.video_ms // "変化なし")ms、位置 \(.position // {} | tostring)、error=\(.error // "なし")、\(.screenshot)"' <<<"$j")"
+    if [[ "$mode" == webrtc-* || "$mode" == hls-fallback ]]; then
+      detail="$(jq -r '"\(.transport // "-") \(.codec // "")、最初の映像 \(.first_frame_ms // "-")ms(開いてから再生まで \(.play_ms)ms)、TURN=\(.relay // "-")、4 秒で \(.advanced)s 進む、\(.videoWidth)x\(.videoHeight)、fallback=\(.fallback // "なし")、\(.screenshot)"' <<<"$j")"
+    elif [[ "$mode" == ptz ]]; then
+      detail="$(jq -r '"[\(.live.transport // "-") \(.live.codec // "")] zoom \(.zoom // "-")、POST \(.post_ms // "-")ms、GET .../ptz に反映 \(.api_ms // "未反映")ms、焼き込み 4 行目が変わるまで \(.video_ms // "変化なし")ms、位置 \(.position // {} | tostring)、error=\(.error // "なし")、\(.screenshot)"' <<<"$j")"
     else
     detail="$(jq -r '"\(.engine // "-")、再生元=\(.chip // "-")、4 秒で \(.advanced // "-")s 進む、\(.videoWidth // 0)x\(.videoHeight // 0)、error=\(.error // "なし")、overlay=\(.overlay // "なし")、\(.screenshot)"' <<<"$j")"
     fi

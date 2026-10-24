@@ -12,6 +12,7 @@
 | カメラ ID | `cam-001` 形式。Terraform の `var.cameras`(list)で定義 |
 | ゲートウェイ ID | `gw-001` 形式。IoT Thing 名は `{p}-{gateway_id}` |
 | KVS ストリーム名 | `{p}-{camera_id}`。保持期間 1 時間。media type はカメラのコーデック(既定 `video/h265`、Terraform の `camera_codecs` で `video/h264`。[codec.md](codec.md)) |
+| KVS WebRTC シグナリングチャネル | `{p}-{camera_id}`(ストリームと同じ名前。1 カメラ 1 本、`SINGLE_MASTER`、`MessageTtlSeconds` 60)。Terraform(awscc プロバイダー)で作る。master はエッジ、viewer はビューワー([webrtc.md](webrtc.md)) |
 | 時刻 | すべて UTC。文字列は ISO 8601 の `2026-10-24T10:20:00Z`(区間の SK はミリ秒なし) |
 | Lambda | Python 3.13、arm64、zip デプロイ(コンテナイメージは使わない) |
 
@@ -162,7 +163,8 @@ Scheduler からの入力は `{"camera_id": "cam-001"}`。カメラごとに 1 �
   "profile_token": null,
   "prefer_codec": null,
   "codec": null,
-  "streaming": true
+  "streaming": true,
+  "webrtc": {"enabled": true}
 }}}}}
 ```
 
@@ -173,6 +175,24 @@ desired の `codec`(`H265` / `H264`、ビューワーの「映像形式」)は�
 理由を `reported.codec_error` に書く。`codec` があれば `prefer_codec` より優先する。
 desired に `rtsp_url`(と `codec`)を書くと ONVIF を使わずにその URL を直接使う(検証用。このときの `codec` は RTSP の形式の申告)。
 シャドウは null を書くとキーを消すので、`error` などが null のときはキーがない(読む側は「ない = null」として扱う)。
+
+**KVS WebRTC(ライブ)**: desired の `webrtc.enabled`(省略時 true)が true で `streaming` も true なら、エッジはカメラごとに
+WebRTC の master(子プロセス)を動かす。`webrtc` だけの変更では録画のパイプラインを作り直さない。
+エッジは `reported.cameras.{id}.webrtc` に次を返す:
+
+| キー | 内容 |
+| --- | --- |
+| `enabled` | desired の値(省略時 true) |
+| `channel` | シグナリングチャネル名 `{p}-{camera_id}` |
+| `state` | `CONNECTED`(シグナリングにつながり視聴者を待っている)/ `STARTING` / `RECONNECTING`(回線断などで SDK がつなぎ直し中)/ `ERROR`(master が終了し再起動待ち)/ `DISABLED`(desired で無効か配信停止)/ `UNAVAILABLE`(master のバイナリか IoT の認証情報がない。ドライランなど) |
+| `codecs` | 視聴者に出せるコーデック(`["H265", "H264"]` など。H.265 が先)。main(録画と同じプロファイル)と、main 以外の H.264 のプロファイル(sub)から決まる |
+| `viewers` | 今の視聴者数 |
+| `error` | `state` が `ERROR` のときの理由 |
+
+master は視聴者の offer の m=video の並びを見て、H.265 が H.264 より前(か H.265 だけ)で H.265 のストリームがあれば main(H.265)、
+そうでなければ H.264 のストリーム(sub を優先)を流す(再エンコードしない)。RTSP は視聴者がいるストリームだけ読み、0 人になって 10 秒で閉じる
+(録画の kvssink とは別の接続。カメラの RTSP の同時接続数は main 2 本 + sub 1 本まで使う)。
+`rtsp_url` を書く設定(ONVIF なし)では、`sub_rtsp_url` と `sub_codec`(既定 `H264`)で H.264 のストリームを与える。
 
 `reported` の最上位には次も入れる(ビューワーのオンライン表示用):
 
@@ -188,7 +208,7 @@ MQTT のクライアント ID は Thing 名。LWT のトピックがポリシー
 
 | トピック | 向き | 内容 |
 | --- | --- | --- |
-| `{p}/{gw}/status` | エッジ → クラウド | 30 秒ごとの死活。`{"ts", "online": true, "gateway_id", "cameras": {"cam-001": {"streaming", "uptime_s", "bytes_sent", "restarts", "gop_s", "persist_latency_ms", "error", "buffer", "last_exit"}}}`(`buffer` は下記)。LWT(異常切断と正常終了の両方)で `{"online": false, "gateway_id"}` |
+| `{p}/{gw}/status` | エッジ → クラウド | 30 秒ごとの死活。`{"ts", "online": true, "gateway_id", "cameras": {"cam-001": {"streaming", "uptime_s", "bytes_sent", "restarts", "gop_s", "persist_latency_ms", "error", "buffer", "last_exit", "webrtc"}}}`(`buffer` と `webrtc` は下記)。LWT(異常切断と正常終了の両方)で `{"online": false, "gateway_id"}` |
 | `{p}/{gw}/discovery` | エッジ → クラウド | WS-Discovery の結果 `{"ts", "gateway_id", "request_id"?, "devices": [{"urn", "types", "scopes", "xaddrs", "from"}]}`。`probe` の結果は `{"probe": {"onvif_url", "selected" or "error"}}` |
 | `{p}/{gw}/cmd` | クラウド → エッジ | 単発コマンド。`{"action": "discover"}`、`{"action": "probe", "onvif_url", "username", "password"}`、`{"action": "restart", "camera_id"?}`、`{"action": "status"}`、`{"action": "reload"}`(シャドウを取り直す)。`request_id` を付けると応答に入る |
 
@@ -205,6 +225,16 @@ status の `cameras.*.buffer`(回線断のバッファ。`sink=kvs` のときだ
 | `lost_s` | 回線断がバッファの上限を超えて失った映像の秒数の累計(最後に永続化された時刻からバッファの最古までの差。再起動をまたいで加算) |
 | `kvs_errors` | KVS への送信エラーの累計(回線断など。これではパイプラインを再起動しない) |
 | `sessions` / `stale_events` / `error_acks` | PutMedia の接続回数、ACK が途絶えて接続を張り直そうとした回数、エラー ACK の数(= KVS が受け付けなかった断片の数)(今の子プロセスの中での累計) |
+
+status の `cameras.*.webrtc`(KVS WebRTC のライブ。値は master が 10 秒ごとに出す計測値):
+
+| キー | 内容 |
+| --- | --- |
+| `state` | reported の `webrtc.state` と同じ |
+| `viewers` / `viewers_by_codec` | 視聴者数と、コーデックごとの内訳 `{"H265": n, "H264": m}` |
+| `sent_kbps` / `sent_bytes` | 視聴者への送信量(10 秒平均の kbps、master の再起動をまたいだ累計バイト)。映像のペイロードだけで、SRTP / RTP / UDP のヘッダー(約 15%)は含まない |
+| `streams` | `{"main": {...}, "sub": {...}}`。それぞれ `codec`、`running`(RTSP を読んでいるか)、`viewers`、`in_kbps`、`sent_kbps`、`restarts`(RTSP のつなぎ直し) |
+| `restarts` / `error` / `last_exit` | master の再起動の回数、理由 |
 
 `last_exit` は直近のパイプライン再起動の理由 `{"code", "ts", "reason"}`(なければ null)。
 
@@ -231,6 +261,7 @@ status の `cameras.*.buffer`(回線断のバッファ。`sink=kvs` のときだ
 | `GET /api/cameras/{id}/timeline?from=&to=` | 録画範囲。レスポンス下記 |
 | `GET /api/cameras/{id}/vod.m3u8?from=&to=` | S3 退避済み区間を連結した HLS プレイリスト(区間ごとに `EXT-X-DISCONTINUITY`、`EXT-X-MAP`、`EXT-X-PROGRAM-DATE-TIME`)。セグメントの URI は `/media/...`。区間の途中で映像形式が変わった区間は部分(`hls.sections`)ごとに同じ 3 つを入れる。メディアプレイリストなので `CODECS` 属性はなく、プレーヤーは各 `EXT-X-MAP` の init から形式を読む(H.265 と H.264 が混ざってよい) |
 | `GET /api/cameras/{id}/kvs-hls?mode=LIVE\|ON_DEMAND&from=&to=` | KVS の HLS セッション URL(`{"url", "expires_at"}`)。fMP4 を指定 |
+| `GET /api/cameras/{id}/webrtc` | KVS WebRTC の視聴情報(下記)。ブラウザに AWS の認証情報は渡さない |
 | `POST /api/search` | `{"question": "..."}` → `{"answer": "...", "hits": [{"camera_id", "ts", "label", "confidence"}], "sql": "...", "usage": {...}}` |
 
 ビューワーが cameras の `reported` / `desired` から読む項目: `streaming`、`codec`、`codec_error`、`resolution`、`error`(`reported`)、`streaming`、`codec`(`desired`)、`name`(どちらか。なければ camera_id を表示)。
@@ -250,6 +281,25 @@ timeline のレスポンス:
   "minutes": [{"start": "...", "sprite": "/media/cam-001/.../sprite.jpg"}]
 }
 ```
+
+`GET /api/cameras/{id}/webrtc` のレスポンス:
+
+```json
+{"camera_id": "cam-001", "channel_name": "{p}-cam-001", "channel_arn": "arn:aws:kinesisvideo:...:channel/{p}-cam-001/...",
+ "region": "ap-northeast-1", "client_id": "viewer-<ランダム 12 桁>",
+ "wss_endpoint": "wss://v-xxxx.kinesisvideo.ap-northeast-1.amazonaws.com",
+ "wss_url": "wss://...?X-Amz-ChannelARN=...&X-Amz-ClientId=...&X-Amz-Expires=299&X-Amz-Signature=...",
+ "ice_servers": [{"urls": ["stun:stun.kinesisvideo.ap-northeast-1.amazonaws.com:443"]},
+                 {"urls": ["turn:...?transport=udp", "turns:...?transport=tcp"], "username": "...", "credential": "..."}],
+ "codecs": ["H265", "H264"], "expires_at": "2026-10-24T05:09:57Z", "issue_ms": 210}
+```
+
+- `wss_url` は ConnectAsViewer の署名付き URL(SigV4 クエリ署名、299 秒で失効、このチャネルとこの `client_id` だけ)。`ice_servers` の TURN は GetIceServerConfig の一時認証情報(300 秒)
+- 先にシャドウを見て、WebRTC で見られないカメラは `409` を返す(ビューワーはすぐ HLS に切り替える):
+  `WEBRTC_DISABLED`(desired の `webrtc.enabled` が false)、`CAMERA_OFFLINE`(ゲートウェイがオフライン)、`WEBRTC_UNAVAILABLE`(reported の `webrtc.state` が `CONNECTED` でない、または webrtc を返さない古いエッジ)。
+  チャネルがなければ `404 CHANNEL_NOT_FOUND`
+- `codecs` は reported の `webrtc.codecs`。ビューワーは `RTCRtpReceiver.getCapabilities('video')` に H.265 があり、`codecs` に `H265` があれば H.265 → H.264 の順、なければ H.264 だけを offer に載せる
+- ビューワーは最初の映像が 10 秒以内に出ない、ICE が 5 秒以上 failed / disconnected のまま、の場合に HLS(`kvs-hls?mode=LIVE`)に切り替える。PTZ の操作は WebRTC のライブ再生中だけ
 
 補足(実装で決めたこと。上の形に項目を足しただけで、既存の項目は変えていない):
 
@@ -284,6 +334,8 @@ timeline のレスポンス:
 ## エッジ
 
 - `docker compose`(リポジトリ直下の `compose.yaml`)でエミュレーターとエッジを一緒に起動して検証できる
+- KVS WebRTC の master(`/opt/kvs/webrtc/bin/ccWebrtcMaster`、C SDK v1.20.0)を同じイメージに入れ、エージェントがカメラごとに子プロセスとして起動・監視する(録画の runner と同じバックオフ)。
+  認証は kvssink と同じ証明書とロールエイリアス(IoT 認証情報プロバイダー)。チャネル名は `config.json` の `webrtc_channel_prefix`(既定 `{p}-`)+ カメラ ID
 - 証明書は `edge/.certs/`(gitignore 済み)をマウント。`scripts/` に Terraform の出力から証明書と設定を書き出すスクリプトを置く
 - 再エンコードしない: `rtspsrc ! rtph265depay ! h265parse ! video/x-h265,stream-format=hvc1,alignment=au ! h265timestamper ! kvssink`
   - H.264 のカメラは `rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! h264timestamper ! kvssink`(コーデックは ONVIF の Encoding、または desired の `codec`)。

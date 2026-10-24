@@ -5,22 +5,24 @@
 # ---------------------------------------------------------------------------
 locals {
   lambda_env = {
-    PROJECT              = local.p
-    STATE_TABLE          = aws_dynamodb_table.state.name
-    MEDIA_BUCKET         = aws_s3_bucket.this["media"].id
-    DETECTIONS_BUCKET    = aws_s3_bucket.this["detections"].id
-    STREAM_NAME_PREFIX   = local.stream_name_prefix
-    LAG_SECONDS          = tostring(var.lag_seconds)
-    MAX_MINUTES          = tostring(var.max_minutes)
-    MAX_ATTEMPTS         = tostring(var.max_attempts)
-    MEDIA_RETENTION_DAYS = tostring(var.media_retention_days)
-    GLUE_DATABASE        = aws_glue_catalog_database.main.name
-    GLUE_TABLE           = aws_glue_catalog_table.detections.name
-    ATHENA_WORKGROUP     = aws_athena_workgroup.main.name
-    BEDROCK_MODEL_ID     = var.bedrock_model_id
-    IOT_DATA_ENDPOINT    = data.aws_iot_endpoint.data.endpoint_address
-    IOT_THING_PREFIX     = local.iot_thing_prefix
-    CAMERAS              = jsonencode({ for c in local.cameras : c => local.camera_gateway[c] })
+    PROJECT            = local.p
+    STATE_TABLE        = aws_dynamodb_table.state.name
+    MEDIA_BUCKET       = aws_s3_bucket.this["media"].id
+    DETECTIONS_BUCKET  = aws_s3_bucket.this["detections"].id
+    STREAM_NAME_PREFIX = local.stream_name_prefix
+    # KVS WebRTC のシグナリングチャネル名の接頭辞(チャネル名 = 接頭辞 + カメラ ID。webrtc.tf)
+    WEBRTC_CHANNEL_PREFIX = local.stream_name_prefix
+    LAG_SECONDS           = tostring(var.lag_seconds)
+    MAX_MINUTES           = tostring(var.max_minutes)
+    MAX_ATTEMPTS          = tostring(var.max_attempts)
+    MEDIA_RETENTION_DAYS  = tostring(var.media_retention_days)
+    GLUE_DATABASE         = aws_glue_catalog_database.main.name
+    GLUE_TABLE            = aws_glue_catalog_table.detections.name
+    ATHENA_WORKGROUP      = aws_athena_workgroup.main.name
+    BEDROCK_MODEL_ID      = var.bedrock_model_id
+    IOT_DATA_ENDPOINT     = data.aws_iot_endpoint.data.endpoint_address
+    IOT_THING_PREFIX      = local.iot_thing_prefix
+    CAMERAS               = jsonencode({ for c in local.cameras : c => local.camera_gateway[c] })
     # 自然言語検索で使うカメラの表示名(未設定のカメラはシャドウの name を使う)
     CAMERA_NAMES = jsonencode(var.camera_names)
     # detector のフレーム源(clip = 動画の退避の clip.mp4 をデコード、getimages = KVS GetImages)と、
@@ -297,6 +299,21 @@ data "aws_iam_policy_document" "lambda" {
         ["arn:${local.partition}:bedrock:*::foundation-model/${local.bedrock_base_model}"],
         local.bedrock_is_profile ? ["arn:${local.partition}:bedrock:${local.region}:${local.account_id}:inference-profile/${var.bedrock_model_id}"] : [],
       )
+    }
+  }
+
+  # KVS WebRTC(api だけ)。ビューワーに渡す ConnectAsViewer の署名付き URL と TURN の認証情報を発行する(webrtc.tf)
+  dynamic "statement" {
+    for_each = each.key == "api" && length(local.cameras) > 0 ? [1] : []
+    content {
+      sid = "WebRtcViewer"
+      actions = [
+        "kinesisvideo:DescribeSignalingChannel",
+        "kinesisvideo:GetSignalingChannelEndpoint",
+        "kinesisvideo:GetIceServerConfig",
+        "kinesisvideo:ConnectAsViewer",
+      ]
+      resources = local.signaling_channel_arns
     }
   }
 

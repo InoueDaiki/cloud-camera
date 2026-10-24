@@ -388,7 +388,7 @@ export function PtzPanel({ cameraId }: Props) {
 
         <Text size="xs" c="dimmed" className={classes.hint}>
           <IconInfoCircle size={14} className={classes.hintIcon} />
-          操作は数秒後に映像に反映されます
+          操作はおよそ 1 秒で映像に反映されます(WebRTC のライブ)
         </Text>
         {error && (
           <Text size="xs" c="red">

@@ -30,7 +30,8 @@ import {
 import { api } from '../api/client';
 import type { Camera } from '../api/types';
 import { CameraSettingsButton } from '../cameras/CameraSettings';
-import { mayBeHevc } from '../lib/codec';
+import { mayBeHevc, normalizeCodec } from '../lib/codec';
+import { liveLabel } from '../lib/webrtc';
 import { LIVE_THRESHOLD_MS, SOURCE_LABEL } from '../lib/playbackSource';
 import {
   nextRecordingStart,
@@ -55,7 +56,8 @@ interface Props {
 const RATES = [1, 2, 4, 8];
 
 export function Player({ pb, camera, now }: Props) {
-  const { attachVideo, cameraId, open, position: pos, source, status, error, support, rate, togglePlay, setRate, retry } = pb;
+  const { attachVideo, cameraId, open, position: pos, source, status, error, support, rate, togglePlay, setRate, retry, live } =
+    pb;
   const qc = useQueryClient();
   const [zoom, setZoom] = useState<ZoomValue>('24h');
   const [pendingDate, setPendingDate] = useState<string | null>(null);
@@ -142,9 +144,30 @@ export function Player({ pb, camera, now }: Props) {
   const next = data && pos !== null && !isLive ? nextRecordingStart(data.merged, pos) : null;
   const processedUntil = data?.videoProcessedUntil ?? null;
   const playing = status === 'playing' || status === 'buffering';
-  // PTZ はライブ再生中だけ操作できる(録画の再生中はパネルを隠し、切り替えボタンは無効にする)
+  // PTZ は WebRTC のライブ再生中だけ操作できる(HLS は数秒遅れて操作感が悪いので、録画の再生中と同じく無効にする)
   const ptzSupported = camera?.ptz_supported === true;
-  const ptzUsable = ptzSupported && isLive && status !== 'no-live';
+  const isRtc = isLive && live?.transport === 'webrtc' && !live.connecting;
+  const ptzUsable = ptzSupported && isRtc && status !== 'no-live';
+  const ptzHint = ptzUsable
+    ? ptzOpen
+      ? 'PTZ 操作を隠す'
+      : 'PTZ 操作を出す'
+    : isLive && live?.transport === 'hls'
+      ? 'PTZ は WebRTC のライブ再生中だけ操作できます(HLS は映像が数秒遅れるため)。「ライブ」で WebRTC につなぎ直せます'
+      : isLive && live?.connecting
+        ? 'WebRTC に接続しています'
+        : 'PTZ はライブ再生中だけ操作できます';
+  // 映像の右上の「ライブ · WebRTC · H.265」。HLS のときはカメラの形式を出す
+  const liveText = isLive && live && !live.connecting
+    ? liveLabel(live.transport, live.codec ?? (live.transport === 'hls' ? normalizeCodec(camera?.codec) : null))
+    : null;
+  const liveTitle = !isLive || !live
+    ? '再生元'
+    : live.connecting
+      ? 'WebRTC に接続中'
+      : live.transport === 'webrtc'
+        ? `WebRTC(低遅延、1 秒未満)${live.relay ? '・TURN 経由' : ''}${live.firstFrameMs ? `・接続 ${(live.firstFrameMs / 1000).toFixed(1)} 秒` : ''}`
+        : `HLS(映像は数秒遅れます)${live.fallback ? `。WebRTC に接続できませんでした: ${live.fallback}` : ''}`;
 
   return (
     <Stack gap="sm">
@@ -173,9 +196,16 @@ export function Player({ pb, camera, now }: Props) {
             <div className={`${classes.clock} tabular`}>{pos !== null ? formatDateTime(pos) : '—'}</div>
           </div>
           {source && (
-            <span className={classes.sourceChip} title="再生元">
+            <span
+              className={classes.sourceChip}
+              title={liveTitle}
+              data-source-chip
+              data-transport={isLive ? live?.transport : undefined}
+              data-codec={isLive ? (live?.codec ?? undefined) : undefined}
+            >
               {isLive && <span className={classes.liveDot} />}
               {SOURCE_LABEL[source]}
+              {liveText && <span className={classes.transport}>{liveText}</span>}
             </span>
           )}
         </div>
@@ -257,7 +287,7 @@ export function Player({ pb, camera, now }: Props) {
             </Menu.Dropdown>
           </Menu>
           {ptzSupported && (
-            <Tooltip label={ptzUsable ? (ptzOpen ? 'PTZ 操作を隠す' : 'PTZ 操作を出す') : 'PTZ はライブ再生中だけ操作できます'}>
+            <Tooltip label={ptzHint} multiline maw={280}>
               <ActionIcon
                 size="lg"
                 variant={ptzUsable && ptzOpen ? 'light' : 'subtle'}

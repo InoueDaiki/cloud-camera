@@ -10,6 +10,7 @@ API の形は [docs/contracts.md](../../docs/contracts.md) の「HTTP API」、�
 | `app/timeline.py` | `GET /api/cameras/{id}/timeline`(処理済み位置の前は DynamoDB、後は KVS ListFragments) |
 | `app/playlist.py` | `GET /api/cameras/{id}/vod.m3u8`(区間の `hls` から複数区間の HLS を組む) |
 | `app/kvs.py` | `GET /api/cameras/{id}/kvs-hls`、ListFragments |
+| `app/webrtc.py` | `GET /api/cameras/{id}/webrtc`(KVS WebRTC の ConnectAsViewer の署名付き WSS URL、GetIceServerConfig の TURN、チャネルの ARN、クライアント ID) |
 | `app/ptz.py` | `POST /api/cameras/{id}/ptz`(IoT Core の cmd トピックへ publish)、`GET /api/cameras/{id}/ptz`(シャドウ) |
 | `app/search.py` / `prompt.py` / `events.py` / `sql_guard.py` / `athena.py` | `POST /api/search`(Bedrock Converse のツール使用 → 引数付き検索か SQL ガード → Athena → 回答の検査) |
 | `local_server.py` | ローカル開発用サーバー |
@@ -39,6 +40,7 @@ mise exec -- ./build.sh                # ../../build/api.zip を作る(sqlglot �
 | `IOT_DATA_ENDPOINT` | `xxxx-ats.iot.ap-northeast-1.amazonaws.com` | `aws iot describe-endpoint --endpoint-type iot:Data-ATS` |
 | `IOT_THING_PREFIX` | `cloud-camera-` | Thing 名 = 接頭辞 + ゲートウェイ ID |
 | `CAMERAS` | `{"cam-001":"gw-001"}` | カメラ ID → ゲートウェイ ID |
+| `WEBRTC_CHANNEL_PREFIX`(任意) | `cloud-camera-` | KVS WebRTC のシグナリングチャネル名の接頭辞。未設定なら `STREAM_NAME_PREFIX` |
 | `MEDIA_URL_PREFIX`(任意) | `/media/` | プレイリストやスプライトの URL の接頭辞 |
 | `SEARCH_TIMEOUT_SECONDS`(任意) | `25` | 検索全体の時間の予算(API Gateway の 30 秒より手前で答える) |
 | `CAMERA_NAMES`(任意) | `{"cam-001":"玄関"}` | 検索のプロンプトに渡すカメラ名。未設定ならシャドウの `name`(reported か desired)を読む |
@@ -78,6 +80,12 @@ mise exec -- uv run python local_server.py --port 8787
 `METHOD_NOT_ALLOWED`(405)、`BEDROCK_*`(429/502)、`INTERNAL`(500)。
 
 ## 各 API の補足
+
+- **webrtc**: シャドウを見て、WebRTC を止めている(`desired.webrtc.enabled=false`)、オフライン、エッジの master が `CONNECTED` でないカメラは 409
+  (`WEBRTC_DISABLED` / `CAMERA_OFFLINE` / `WEBRTC_UNAVAILABLE`)を KVS に問い合わせずに返す。チャネルの ARN と viewer のエンドポイントは
+  コンテナ内で 6 時間キャッシュし(DescribeSignalingChannel / GetSignalingChannelEndpoint はチャネルあたり 5 TPS)、リクエストごとに
+  GetIceServerConfig を 1 回呼ぶ。署名は Lambda のロールの一時認証情報で SigV4 のクエリ署名(`X-Amz-Expires=299`)。
+  IAM は `kinesisvideo:DescribeSignalingChannel` / `GetSignalingChannelEndpoint` / `GetIceServerConfig` / `ConnectAsViewer`(チャネルの ARN)
 
 - **timeline**: `from`/`to` は ISO 8601(`Z` かオフセット付き)か epoch ミリ秒。省略時は直近 1 時間、最大 48 時間。
   DynamoDB は必要な属性だけ(`video_status`、`segments`、`files.sprite`)を取り、ページ送りする。

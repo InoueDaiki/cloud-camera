@@ -452,6 +452,9 @@ def _residue() -> str:
     kv = boto3.client("kinesisvideo")
     streams = kv.list_streams(StreamNameCondition={"ComparisonOperator": "BEGINS_WITH", "ComparisonValue": project + "-"})
     found += [f"kvs:{s['StreamName']} ({s['Status']})" for s in streams.get("StreamInfoList", [])]
+    chans = kv.list_signaling_channels(
+        ChannelNameCondition={"ComparisonOperator": "BEGINS_WITH", "ComparisonValue": project + "-"})
+    found += [f"kvs-channel:{c['ChannelName']} ({c['ChannelStatus']})" for c in chans.get("ChannelInfoList", [])]
     iot = boto3.client("iot")
     found += [f"iot-thing:{t['thingName']}" for t in iot.list_things()["things"] if t["thingName"].startswith(project + "-")]
     found += [f"iot-policy:{p['policyName']}" for p in iot.list_policies()["policies"] if p["policyName"].startswith(project + "-")]
@@ -484,7 +487,7 @@ def _residue() -> str:
             found.append(f"cloudfront:{d['Id']}")
     if found:
         raise Fail("残骸: " + ", ".join(found))
-    return "タグ、S3、ロググループ、KVS、IoT(Thing・ポリシー・ロールエイリアス・証明書)、スケジュール、DynamoDB、Glue、Athena、IAM、CloudFront に残りなし"
+    return "タグ、S3、ロググループ、KVS(ストリーム・シグナリングチャネル)、IoT(Thing・ポリシー・ロールエイリアス・証明書)、スケジュール、DynamoDB、Glue、Athena、IAM、CloudFront に残りなし"
 
 
 def stage_certs(a) -> str:

@@ -53,23 +53,24 @@ scripts/destroy.sh cc-tmp-foo
 | `data.tf` | DynamoDB `{p}-state`(オンデマンド、TTL `expires_at`)、Glue `{p_underscored}.detections`(Parquet、`dt` のパーティションプロジェクション)、Athena ワークグループ `{p}` |
 | `lambda.tf` | `{p}-video-archiver` / `{p}-detector` / `{p}-api`(Python 3.13、arm64、`handler.lambda_handler`)。zip は artifacts バケット経由でデプロイ(50MB 超でも可、展開後 250MB まで)。関数ごとの IAM ロール、ロググループ |
 | `scheduler.tf` | スケジュールグループ `{p}`、カメラごとに `{p}-video-{cam}` / `{p}-detect-{cam}`(rate(1 minute)、入力 `{"camera_id": ...}`、再試行なし) |
+| `webrtc.tf` | KVS WebRTC のシグナリングチャネル `{p}-{camera_id}`(カメラごと、`SINGLE_MASTER`、メッセージの保持 60 秒)。hashicorp/aws にリソースがないので **awscc プロバイダー**(Cloud Control API)の `awscc_kinesisvideo_signaling_channel`。タグ `Project` / `ManagedBy` は直接付ける。KVS 用ロール `{p}-kvs-producer` に master の権限(DescribeSignalingChannel、GetSignalingChannelEndpoint、GetIceServerConfig、ConnectAsMaster。チャネルの ARN だけ) |
 | `api.tf` | HTTP API(`ANY /api/{proxy+}` → api Lambda、ペイロード 2.0)、アクセスログ |
 | `cloudfront.tf` | ディストリビューション 1 つ。既定 = viewer バケット、`/api/*` = HTTP API(キャッシュ無効、Host 以外のヘッダー・クエリ・Cookie を転送)、`/media/*.m3u8` と `/media/*` = media バケット(`/media` を外す CloudFront Function、m3u8 はキャッシュ無効) |
 
 ### Lambda の環境変数(3 本共通)
 
-`PROJECT`、`STATE_TABLE`、`MEDIA_BUCKET`、`DETECTIONS_BUCKET`、`STREAM_NAME_PREFIX`(`{p}-`)、`LAG_SECONDS`、`MAX_MINUTES`、`MAX_ATTEMPTS`、`MEDIA_RETENTION_DAYS`、`GLUE_DATABASE`、`GLUE_TABLE`、`ATHENA_WORKGROUP`、`BEDROCK_MODEL_ID`、`IOT_DATA_ENDPOINT`、`IOT_THING_PREFIX`(`{p}-`)、`CAMERAS`(JSON: camera_id → gateway_id)
+`PROJECT`、`STATE_TABLE`、`MEDIA_BUCKET`、`DETECTIONS_BUCKET`、`STREAM_NAME_PREFIX`(`{p}-`)、`LAG_SECONDS`、`MAX_MINUTES`、`MAX_ATTEMPTS`、`MEDIA_RETENTION_DAYS`、`GLUE_DATABASE`、`GLUE_TABLE`、`ATHENA_WORKGROUP`、`BEDROCK_MODEL_ID`、`IOT_DATA_ENDPOINT`、`IOT_THING_PREFIX`(`{p}-`)、`WEBRTC_CHANNEL_PREFIX`(`{p}-`)、`CAMERAS`(JSON: camera_id → gateway_id)
 
 ### 権限の要点
 
 - video_archiver: KVS の ListFragments / GetClip / GetImages / GetMediaForFragmentList / GetDataEndpoint、media バケットの読み書き、状態テーブルの読み書き
 - detector: KVS の ListFragments / GetImages / GetDataEndpoint、detections バケットの Get / Put、Glue の読み取り、状態テーブルの読み書き
-- api: 状態テーブルの読み取り、KVS の HLS 系と ListFragments 等、media の読み取り、Athena(このワークグループだけ)と結果バケット、detections と Glue の読み取り、Bedrock の InvokeModel*(推論プロファイルとルーティング先の基盤モデル)、IoT シャドウの Get / Update(このプロジェクトの Thing だけ)
+- api: KVS WebRTC の viewer(DescribeSignalingChannel、GetSignalingChannelEndpoint、GetIceServerConfig、ConnectAsViewer。チャネルの ARN だけ)、状態テーブルの読み取り、KVS の HLS 系と ListFragments 等、media の読み取り、Athena(このワークグループだけ)と結果バケット、detections と Glue の読み取り、Bedrock の InvokeModel*(推論プロファイルとルーティング先の基盤モデル)、IoT シャドウの Get / Update(このプロジェクトの Thing だけ)
 - Converse / ConverseStream も IAM では `bedrock:InvokeModel` / `InvokeModelWithResponseStream` で判定される
 
 ## outputs
 
-`project`、`region`、`iot_data_endpoint`、`iot_credential_endpoint`、`kvs_role_alias`、`gateways`(gateway_id → {thing_name, cameras})、`gateway_certificates`(sensitive。gateway_id → {certificate_pem, private_key})、`kvs_streams`、`cloudfront_url`、`cloudfront_distribution_id`、`viewer_bucket`、`media_bucket`、`detections_bucket`、`athena_bucket`、`artifacts_bucket`、`state_table`、`api_endpoint`、`lambda_functions`、`glue_database`、`athena_workgroup`
+`project`、`region`、`iot_data_endpoint`、`iot_credential_endpoint`、`kvs_role_alias`、`gateways`(gateway_id → {thing_name, cameras})、`gateway_certificates`(sensitive。gateway_id → {certificate_pem, private_key})、`kvs_streams`、`webrtc_channels`(camera_id → {name, arn})、`webrtc_channel_prefix`(エッジの config.json に書く)、`cloudfront_url`、`cloudfront_distribution_id`、`viewer_bucket`、`media_bucket`、`detections_bucket`、`athena_bucket`、`artifacts_bucket`、`state_table`、`api_endpoint`、`lambda_functions`、`glue_database`、`athena_workgroup`
 
 ```sh
 terraform -chdir=infra output -json gateway_certificates | jq -r '."gw-001".private_key'

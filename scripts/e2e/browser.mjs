@@ -1,7 +1,7 @@
 // ビューワーを実ブラウザで開き、ライブ・KVS 録画・S3 録画の再生を確かめる(scripts/e2e/run.sh から呼ぶ)。
 //
 //   node scripts/e2e/browser.mjs --url https://dxxx.cloudfront.net --out <スクショの出力先> \
-//     [--browser chrome|webkit|chromium] [--modes live,kvs,s3] [--s3-at <epoch ms>] [--camera cam-001] [--headed]
+//     [--browser chrome|webkit|chromium] [--modes live,kvs,s3,webrtc-h265,webrtc-h264,hls-fallback,ptz] [--s3-at <epoch ms>] [--camera cam-001] [--headed]
 //
 // Playwright は viewer/node_modules のものを使う(viewer で npm ci 済みであること)。
 // chrome は本物の Google Chrome(channel: 'chrome')。同梱の Chromium は H.265 を再生できないことがある。
@@ -85,7 +85,7 @@ await page.waitForTimeout(800);
 const videoState = () =>
   page.evaluate(() => {
     const v = document.querySelector('video');
-    const chip = document.querySelector('[title="再生元"]');
+    const chip = document.querySelector('[data-source-chip]');
     const overlay = [...document.querySelectorAll('div')].find((d) => /再生できません|取得できませんでした|ライブ映像がありません/.test(d.textContent ?? '') && d.children.length < 6);
     return {
       currentTime: v.currentTime,
@@ -106,7 +106,7 @@ async function checkPlaying(mode) {
   const want = SOURCE_LABEL[mode];
   const deadline = Date.now() + 45_000;
   let s = await videoState();
-  while (Date.now() < deadline && !(s.chip === want && s.readyState >= 2 && s.videoWidth > 0)) {
+  while (Date.now() < deadline && !(s.chip?.startsWith(want) && s.readyState >= 2 && s.videoWidth > 0)) {
     if (s.overlay && /再生できません|取得できませんでした/.test(s.overlay)) break;
     await page.waitForTimeout(500);
     s = await videoState();
@@ -115,7 +115,7 @@ async function checkPlaying(mode) {
   await page.waitForTimeout(4000);
   const s1 = await videoState();
   const advanced = s1.currentTime - t0;
-  const ok = s1.chip === want && s1.videoWidth > 0 && advanced > 1.5 && !s1.error && !s1.overlay;
+  const ok = !!s1.chip?.startsWith(want) && s1.videoWidth > 0 && advanced > 1.5 && !s1.error && !s1.overlay;
   const shot = join(args.out, `${args.browser}-${mode}.png`);
   await page.screenshot({ path: shot });
   const engine = s1.src.startsWith('blob:') ? 'hls.js(MSE)' : s1.src ? 'native' : 'unknown';
@@ -237,6 +237,8 @@ async function checkPtz() {
     api_ms: apiMs,
     video_ms: videoMs,
     noise: Number(noise.toFixed(3)),
+    // ライブの方式(PTZ は WebRTC のライブで測る。HLS なら数秒遅れる)
+    live: await page.evaluate(() => globalThis.__ccLive ?? null),
     position: after ? { pan: after.pan, tilt: after.tilt, zoom: after.zoom, move_status: after.move_status } : null,
     screenshot: shot,
   });
@@ -244,9 +246,89 @@ async function checkPtz() {
   await page.evaluate(async (u) => fetch(u, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'absolute', pan: 0, tilt: 0, zoom: 0 }) }), ptzUrl);
 }
 
+// ライブの方式(KVS WebRTC と HLS への切り替え)。モードごとに新しいコンテキストで開く
+//   webrtc-h265: そのまま開く → WebRTC で H.265(main)
+//   webrtc-h264: RTCRtpReceiver.getCapabilities から H.265 を消す(H.265 を受けられないブラウザ)→ WebRTC で H.264(sub)
+//   hls-fallback: GET .../webrtc を 409 にする(エッジの WebRTC が止まっている)→ HLS
+const RTC_EXPECT = {
+  'webrtc-h265': { transport: 'webrtc', codec: 'H.265' },
+  'webrtc-h264': { transport: 'webrtc', codec: 'H.264' },
+  'hls-fallback': { transport: 'hls', codec: null },
+};
+async function checkLiveTransport(mode) {
+  const want = RTC_EXPECT[mode];
+  const c = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'ja-JP', colorScheme: 'light' });
+  try {
+    if (mode === 'webrtc-h264') {
+      await c.addInitScript(() => {
+        const orig = RTCRtpReceiver.getCapabilities.bind(RTCRtpReceiver);
+        RTCRtpReceiver.getCapabilities = (kind) => {
+          const r = orig(kind);
+          if (r && kind === 'video') r.codecs = r.codecs.filter((x) => !/h265|hevc/i.test(x.mimeType));
+          return r;
+        };
+      });
+    }
+    if (mode === 'hls-fallback') {
+      // page.route は MSW(Service Worker)の応答を横取りできないので、fetch を包む(実環境でもモックでも同じに動く)
+      await c.addInitScript(() => {
+        const orig = globalThis.fetch.bind(globalThis);
+        globalThis.fetch = (input, init) => {
+          const u = typeof input === 'string' ? input : input.url;
+          if (/\/api\/cameras\/[^/]+\/webrtc/.test(u)) {
+            return Promise.resolve(new Response(JSON.stringify({ error: { code: 'WEBRTC_UNAVAILABLE', message: 'E2E: WebRTC を止めた' } }),
+              { status: 409, headers: { 'content-type': 'application/json' } }));
+          }
+          return orig(input, init);
+        };
+      });
+    }
+    const p = await c.newPage();
+    const t0 = Date.now();
+    await p.goto(args.url, { waitUntil: 'domcontentloaded' });
+    const state = () => p.evaluate(() => {
+      const v = document.querySelector('video');
+      return {
+        live: globalThis.__ccLive ?? null,
+        chip: document.querySelector('[data-source-chip]')?.textContent?.trim() ?? null,
+        t: v?.currentTime ?? 0, w: v?.videoWidth ?? 0, h: v?.videoHeight ?? 0, rs: v?.readyState ?? 0,
+      };
+    });
+    let st = await state();
+    const deadline = Date.now() + 45_000;
+    while (Date.now() < deadline && !(st.live && !st.live.connecting && st.rs >= 2 && st.w > 0)) {
+      await p.waitForTimeout(250);
+      st = await state();
+    }
+    const playMs = Date.now() - t0;
+    await p.waitForTimeout(3000); // getStats でコーデックを確かめる時間
+    const t1 = (await state()).t;
+    await p.waitForTimeout(4000);
+    const st2 = await state();
+    const stats = await p.evaluate(async () => (globalThis.__ccLiveStats ? globalThis.__ccLiveStats() : null)).catch(() => null);
+    const advanced = st2.t - t1;
+    const live = st2.live;
+    const ok = !!live && live.transport === want.transport && (want.codec === null || live.codec === want.codec)
+      && st2.w > 0 && advanced > 1.5;
+    const shot = join(args.out, `${args.browser}-${mode}.png`);
+    await p.screenshot({ path: shot });
+    emit({
+      mode, browser: args.browser, ok, transport: live?.transport, codec: live?.codec, chip: st2.chip,
+      first_frame_ms: live?.firstFrameMs ?? null, play_ms: playMs, fallback: live?.fallback ?? null, relay: live?.relay ?? null,
+      advanced: Number(advanced.toFixed(2)), videoWidth: st2.w, videoHeight: st2.h, stats, screenshot: shot,
+    });
+  } finally {
+    await c.close();
+  }
+}
+
 for (const mode of args.modes.split(',').filter(Boolean)) {
   playlists.length = 0;
   try {
+    if (mode in RTC_EXPECT) {
+      await checkLiveTransport(mode);
+      continue;
+    }
     if (mode === 'ptz') {
       await checkPtz();
       continue;

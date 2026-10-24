@@ -8,7 +8,7 @@
 #                                                       # (deploy.sh は project 名と同じワークスペースを使う。既定 cloud-camera)
 #
 # 前提とする Terraform の output:
-#   project, iot_data_endpoint, iot_credential_endpoint, kvs_role_alias,
+#   project, iot_data_endpoint, iot_credential_endpoint, kvs_role_alias, webrtc_channel_prefix(なければ {project}-),
 #   gateways             = { gw-001 = { thing_name, cameras } }
 #   gateway_certificates = { gw-001 = { certificate_pem, private_key } }(sensitive)
 #
@@ -74,6 +74,8 @@ for gw in targets:
         "iot_endpoint": out("iot_data_endpoint"),
         "iot_credential_endpoint": out("iot_credential_endpoint"),
         "kvs_role_alias": out("kvs_role_alias"),
+        # KVS WebRTC のシグナリングチャネル名の接頭辞(チャネル名 = 接頭辞 + カメラ ID。master はこのロールエイリアスで接続する)
+        "webrtc_channel_prefix": tf.get("webrtc_channel_prefix", {}).get("value", f"{project}-"),
         "use_shadow": True,
         "sink": "kvs",
         # 参考情報(実際の配信対象はシャドウの desired.cameras で決まる)

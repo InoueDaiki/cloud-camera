@@ -31,6 +31,15 @@
 - 理由: HLS のライブは数秒遅れ、PTZ の操作感が悪い。低遅延のメリットがエッジの複雑さを上回る
 - 構想.md との差: ライブの経路に WebRTC が加わる(調査結果は [webrtc.md](webrtc.md))
 - 実装の方針(2026-10-24): ライブは WebRTC を基本にし、失敗したら HLS に切り替える。シグナリングチャネルは 1 カメラ 1 本で、なるべく Terraform で管理する
+- 実装(2026-10-24): master(C SDK v1.20.0)を既存のエッジのイメージに入れ、エージェントがカメラごとに子プロセスとして起動・監視する(録画の runner と同じバックオフ。録画とは別プロセスなので回線断のバッファには触らない)。
+  視聴者ごとに offer の並びを見て main(H.265)か sub(H.264)を流し、両方の視聴者が同時にいれば両方の RTSP を読む。ビューワーは API が署名した WSS URL で接続し、10 秒以内に映像が出なければ HLS に切り替える。PTZ は WebRTC のライブ再生中だけ操作できる。
+  契約は [contracts.md](contracts.md)(シャドウの `webrtc`、status の `webrtc`、`GET /api/cameras/{id}/webrtc`)
+
+### シグナリングチャネルは Terraform の awscc プロバイダーで作る(2026-10-24)
+
+- 決めたこと: `{p}-{camera_id}` のチャネルを `awscc_kinesisvideo_signaling_channel`(Cloud Control API の `AWS::KinesisVideo::SignalingChannel`)でカメラごとに作る。IAM(エッジの ConnectAsMaster、API の ConnectAsViewer など)はチャネルの ARN を個別に指定する
+- 理由: hashicorp/aws(6.70.0 時点)にはシグナリングチャネルのリソースがない。CloudFormation の型は Cloud Control で FULLY_MUTABLE(作成・更新・削除・一覧に対応)なので、awscc で state に載り、destroy で消える。エッジに CreateSignalingChannel を許して作らせる案は、削除が Terraform の外になるので採らなかった
+- 注意: awscc は default_tags を持たないので、`Project` / `ManagedBy` のタグをリソースに直接付けている
 
 ### コーデックは H.265 を基本にし、H.264 にも切り替えられるようにする(2026-10-24)
 

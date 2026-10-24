@@ -64,6 +64,12 @@ class DeskParams:
     cloudfront_miss_ratio: float = 1.0  # CloudFront のキャッシュミス率(S3 GET の数。安全側に 1)
     api_requests_per_view_hour: float = 120.0  # timeline、vod.m3u8 などの API 呼び出し
     api_duration_ms: float = 150.0
+    # ライブ(KVS WebRTC。docs/webrtc.md §4)。kvs_view_hours とは別(WebRTC がつながらないときの HLS は kvs_view_hours に含める)
+    webrtc_channels_per_camera: float = 1.0  # 1 カメラ 1 チャネル。master が常時接続するので毎月アクティブ
+    webrtc_view_hours: float = 1.0  # WebRTC で見る時間 / 台・月
+    webrtc_sessions_per_view_hour: float = 4.0  # 1 時間あたりの接続回数(画面を開く、カメラを切り替える)
+    webrtc_messages_per_session: float = 20.0  # SDP 2 件 + ICE 候補(推測、未計測)
+    webrtc_turn_ratio: float = 0.5  # TURN を経由する視聴の割合(同じ LAN や素直な NAT なら P2P で 0。推測)
     api_memory_mb: int = 512
     # 検索(台数によらない)
     questions_per_month: float = 100.0
@@ -196,9 +202,18 @@ def build_lines(p: DeskParams) -> list[Line]:
                   "camera", src, "無料"))
     L.append(Line("再生", "S3 GET(CloudFront のオリジン取得)", "s3.get", cf_req * p.cloudfront_miss_ratio, "camera",
                   src, f"キャッシュミス率 {p.cloudfront_miss_ratio:g}"))
-    api_req = p.api_requests_per_view_hour * (p.kvs_view_hours + p.s3_view_hours)
+    # ライブ(WebRTC)。P2P なら映像の転送料はかからない(KVS の取り出しもない)
+    rtc_sessions = p.webrtc_view_hours * p.webrtc_sessions_per_view_hour
+    L.append(Line("再生", "KVS WebRTC シグナリングチャネル", "kvs.webrtc_channel_month", p.webrtc_channels_per_camera,
+                  "camera", src, "1 カメラ 1 チャネル(master が常時接続)"))
+    L.append(Line("再生", "KVS WebRTC シグナリングメッセージ", "kvs.webrtc_messages",
+                  rtc_sessions * p.webrtc_messages_per_session, "camera", src,
+                  f"{p.webrtc_view_hours:g} 時間 × {p.webrtc_sessions_per_view_hour:g} 回 × {p.webrtc_messages_per_session:g} 件"))
+    L.append(Line("再生", "KVS WebRTC TURN", "kvs.webrtc_turn_minutes", p.webrtc_view_hours * 60 * p.webrtc_turn_ratio,
+                  "camera", src, f"{p.webrtc_view_hours:g} 時間のうち TURN 経由 {p.webrtc_turn_ratio:g}"))
+    api_req = p.api_requests_per_view_hour * (p.kvs_view_hours + p.s3_view_hours + p.webrtc_view_hours) + rtc_sessions
     L.append(Line("再生", "API Gateway(HTTP API)", "apigw.http_requests", api_req, "camera", src,
-                  f"{p.api_requests_per_view_hour:g} 回 / 視聴時間"))
+                  f"{p.api_requests_per_view_hour:g} 回 / 視聴時間 + WebRTC の発行 {rtc_sessions:g} 回"))
     L.append(Line("再生", "CloudFront リクエスト(/api)", "cloudfront.https_requests", api_req, "camera", src, ""))
     lam("再生", "api", p.api_memory_mb, 512, api_req * p.api_duration_ms, api_req,
         api_req * p.log_bytes_per_invocation, f"{p.api_duration_ms:g} ms / リクエスト")

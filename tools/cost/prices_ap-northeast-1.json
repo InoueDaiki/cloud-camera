@@ -172,6 +172,72 @@
    "free_tier": null,
    "note": ""
   },
+  "kvs.webrtc_channel_month": {
+   "key": "kvs.webrtc_channel_month",
+   "label": "KVS WebRTC シグナリングチャネル",
+   "unit": "チャネル・月",
+   "source": "pricing_api",
+   "service": "AmazonKinesisVideo",
+   "usagetype": "APN1-SignalingChannel",
+   "sku": "YJNDCKF3NSS9MZQ6",
+   "publication_date": "2026-09-30",
+   "unit_scale": 1.0,
+   "url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonKinesisVideo/current/ap-northeast-1/index.json",
+   "tiers": [
+    {
+     "begin": 0.0,
+     "end": null,
+     "price": 0.045,
+     "description": "$0.045 per active signaling channel per month"
+    }
+   ],
+   "free_tier": null,
+   "note": "docs/webrtc.md §4 で Price List の index.json から確認した値(Pricing API で取り直すと置き換わる)"
+  },
+  "kvs.webrtc_messages": {
+   "key": "kvs.webrtc_messages",
+   "label": "KVS WebRTC シグナリングメッセージ",
+   "unit": "メッセージ",
+   "source": "pricing_api",
+   "service": "AmazonKinesisVideo",
+   "usagetype": "APN1-SignalingMessages",
+   "sku": "PNBMYUWEB8PY3KTB",
+   "publication_date": "2026-09-30",
+   "unit_scale": 1.0,
+   "url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonKinesisVideo/current/ap-northeast-1/index.json",
+   "tiers": [
+    {
+     "begin": 0.0,
+     "end": null,
+     "price": 3.375e-06,
+     "description": "$3.375 per million signaling messages"
+    }
+   ],
+   "free_tier": null,
+   "note": "docs/webrtc.md §4 で Price List の index.json から確認した値(Pricing API で取り直すと置き換わる)"
+  },
+  "kvs.webrtc_turn_minutes": {
+   "key": "kvs.webrtc_turn_minutes",
+   "label": "KVS WebRTC TURN",
+   "unit": "分",
+   "source": "pricing_api",
+   "service": "AmazonKinesisVideo",
+   "usagetype": "APN1-TURNMinutes",
+   "sku": "SDC5CE5UJATY9793",
+   "publication_date": "2026-09-30",
+   "unit_scale": 1.0,
+   "url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonKinesisVideo/current/ap-northeast-1/index.json",
+   "tiers": [
+    {
+     "begin": 0.0,
+     "end": null,
+     "price": 0.00018,
+     "description": "$0.18 per 1,000 TURN streaming minutes"
+    }
+   ],
+   "free_tier": null,
+   "note": "docs/webrtc.md §4 で Price List の index.json から確認した値(Pricing API で取り直すと置き換わる)"
+  },
   "lambda.gb_s.arm64": {
    "key": "lambda.gb_s.arm64",
    "label": "Lambda 実行(arm64)",

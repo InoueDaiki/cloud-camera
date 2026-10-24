@@ -56,6 +56,10 @@ def _specs() -> list[Spec]:
            {"operation": "GetImages"}))
     a(Spec("kvs.getimages_highres", kv, "{R}-HighRes-ImagesCount", "画像", "KVS GetImages(1080p 超)",
            {"operation": "GetImages"}))
+    # KVS WebRTC(ライブ。docs/webrtc.md §4)。チャネルはその月に 1 回でも接続があれば課金(master は常時接続)
+    a(Spec("kvs.webrtc_channel_month", kv, "{R}-SignalingChannel", "チャネル・月", "KVS WebRTC シグナリングチャネル"))
+    a(Spec("kvs.webrtc_messages", kv, "{R}-SignalingMessages", "メッセージ", "KVS WebRTC シグナリングメッセージ"))
+    a(Spec("kvs.webrtc_turn_minutes", kv, "{R}-TURNMinutes", "分", "KVS WebRTC TURN"))
     # --- Lambda ---
     lm = "AWSLambda"
     a(Spec("lambda.gb_s.arm64", lm, "{R}-Lambda-GB-Second-ARM", "GB 秒", "Lambda 実行(arm64)"))

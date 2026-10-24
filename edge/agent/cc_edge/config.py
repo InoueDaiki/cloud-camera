@@ -66,6 +66,14 @@ class Config:
     # ONVIF でプロファイルを自動選択するときに優先するコーデック(H265 / H264)。カメラごとにシャドウの prefer_codec で上書きできる
     prefer_codec: str = "H265"
 
+    # KVS WebRTC のライブ(カメラごとに master の子プロセス)。false で全カメラ止める。カメラごとの有効・無効はシャドウの webrtc.enabled
+    webrtc: bool = True
+    webrtc_bin: str = "/opt/kvs/webrtc/bin/ccWebrtcMaster"
+    webrtc_channel_prefix: str = ""  # 空なら {project}-(チャネル名 = 接頭辞 + カメラ ID。KVS ストリームと同じ名前)
+    webrtc_idle_stop_s: int = 10  # 視聴者が 0 人になってから RTSP を閉じるまでの秒数
+    webrtc_ice_transport_policy: str = "all"  # relay で TURN を強制(検証用)
+    webrtc_log_level: int = 3  # SDK のログ(1 verbose 〜 4 warn)
+
     # シャドウを使わないときのカメラ設定(シャドウの desired.cameras と同じ形)
     cameras: dict[str, dict[str, Any]] = field(default_factory=dict)
 
@@ -102,6 +110,16 @@ class Config:
     def stream_name(self, camera_id: str) -> str:
         return f"{self.project}-{camera_id}"
 
+    def channel_name(self, camera_id: str) -> str:
+        """KVS WebRTC のシグナリングチャネル名(Terraform が作る。1 カメラ 1 本)。"""
+        return f"{self.webrtc_channel_prefix or self.project + '-'}{camera_id}"
+
+    @property
+    def webrtc_available(self) -> bool:
+        """master を動かせるか(バイナリと IoT 認証情報プロバイダーの設定がある)。"""
+        return (self.webrtc and Path(self.webrtc_bin).exists() and bool(self.iot_credential_endpoint)
+                and Path(self.cert_path).exists() and Path(self.key_path).exists())
+
 
 # 環境変数名 → フィールド名
 _ENV = {
@@ -135,6 +153,12 @@ _ENV = {
     "CC_KVS_FRAMERATE": "kvs_framerate",
     "CC_KVS_LOG_CONFIG": "kvs_log_config",
     "CC_PREFER_CODEC": "prefer_codec",
+    "CC_WEBRTC": "webrtc",
+    "CC_WEBRTC_BIN": "webrtc_bin",
+    "CC_WEBRTC_CHANNEL_PREFIX": "webrtc_channel_prefix",
+    "CC_WEBRTC_IDLE_STOP_S": "webrtc_idle_stop_s",
+    "CC_WEBRTC_ICE_TRANSPORT_POLICY": "webrtc_ice_transport_policy",
+    "CC_WEBRTC_LOG_LEVEL": "webrtc_log_level",
     "CC_LOG_LEVEL": "log_level",
 }
 

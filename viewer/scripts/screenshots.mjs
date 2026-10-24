@@ -118,6 +118,16 @@ for (const scheme of ['light', 'dark']) {
       await page.waitForTimeout(500);
       await shot('7-camera-list');
     }
+
+    // ライブの方式: 駐車場は WebRTC を止めているので HLS(右上に「HLS」、PTZ は無効)
+    // (スマホはカメラ一覧が開いたまま)
+    await page.getByText('駐車場').first().click();
+    await page.getByRole('button', { name: 'ライブ' }).click();
+    await page.waitForTimeout(3500);
+    await page.evaluate(() => globalThis.scrollTo(0, 0));
+    await shot('8-live-hls');
+    const live = await page.evaluate(() => globalThis.__ccLive);
+    console.log(`[${scheme}/${vpName}] 駐車場のライブ: ${JSON.stringify(live)}`);
     await ctx.close();
   }
 }

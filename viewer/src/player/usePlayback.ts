@@ -1,10 +1,13 @@
 // プレイヤーの中核。位置は常に「絶対時刻(epoch ミリ秒)」で扱い、
 // 再生元(ライブ / KVS / S3)の切り替えと窓の読み直しはここで隠す。
+// ライブは KVS WebRTC(低遅延)を先に試し、つながらなければ KVS の HLS(LIVE)に切り替える(docs/webrtc.md)。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Hls, { type Fragment } from 'hls.js';
 import { api, ApiError } from '../api/client';
 import { detectSupport } from '../lib/codec';
+import { liveOverride, type LiveTransport, type RtcCodec } from '../lib/webrtc';
+import { startWebRtc, type RtcLive } from './webrtcLive';
 import {
   playbackWindow,
   windowCovers,
@@ -20,10 +23,29 @@ export interface PlayerError {
   message: string;
 }
 
+/** ライブの方式(WebRTC か HLS か)と、見ているコーデック */
+export interface LiveInfo {
+  transport: LiveTransport;
+  /** WebRTC で受けているコーデック(answer と getStats から)。HLS のときは null(カメラの形式で表示する) */
+  codec: RtcCodec | null;
+  /** WebRTC を試して HLS に切り替えた理由 */
+  fallback: string | null;
+  /** WebRTC の接続中(最初の映像を待っている) */
+  connecting: boolean;
+  /** TURN 経由か */
+  relay: boolean;
+  /** API の呼び出しから最初の映像まで(ms) */
+  firstFrameMs: number | null;
+  /** WebRTC のセッションの印(getStats の取り直し用) */
+  sessionId?: number;
+}
+
 interface Session {
   cameraId: string;
   win: PlaybackWindow;
   hls: Hls | null;
+  /** WebRTC のライブ */
+  rtc: RtcLive | null;
   frags: Fragment[];
   /** PROGRAM-DATE-TIME がないときの、currentTime 0 に対応する時刻 */
   base: number;
@@ -55,6 +77,8 @@ export function usePlayback(processedUntil: (cameraId: string) => number | null)
   const [status, setStatus] = useState<PlayerStatus>('idle');
   const [error, setError] = useState<PlayerError | null>(null);
   const [rate, setRateState] = useState(1);
+  const [live, setLive] = useState<LiveInfo | null>(null);
+  const override = useMemo(() => (typeof window === 'undefined' ? 'auto' : liveOverride(window.location.search)), []);
   const sessionRef = useRef<Session | null>(null);
   const processedRef = useRef(processedUntil);
   const rateRef = useRef(1);
@@ -73,6 +97,7 @@ export function usePlayback(processedUntil: (cameraId: string) => number | null)
   const absoluteTime = useCallback((s: Session): number | null => {
     const video = videoRef.current;
     if (!video) return null;
+    if (s.rtc) return Date.now(); // WebRTC は 1 秒未満の遅れなので現在時刻で表す
     if (s.hls) {
       const d = s.hls.playingDate;
       if (d) return d.getTime();
@@ -106,6 +131,7 @@ export function usePlayback(processedUntil: (cameraId: string) => number | null)
     const video = videoRef.current;
     if (!cameraId || !video) return;
     let cancelled = false;
+    const abort = new AbortController();
 
     const advance = (s: Session) => {
       // 窓の終わりまで来たら次の窓へ。現在に追いついたらライブへ
@@ -138,6 +164,47 @@ export function usePlayback(processedUntil: (cameraId: string) => number | null)
       setError(null);
       setPosition(target.kind === 'time' ? target.at : now);
 
+      // ライブは WebRTC を先に試す。つながらなければ(409、タイムアウト、ICE の失敗)HLS へ
+      let fallback: string | null = null;
+      if (win.kind === 'live' && override !== 'hls') {
+        setLive({ transport: 'webrtc', codec: null, fallback: null, connecting: true, relay: false, firstFrameMs: null });
+        const id = ++sessionSeq.current;
+        try {
+          const rtc = await startWebRtc({
+            cameraId,
+            video,
+            preferH265: override !== 'h264',
+            signal: abort.signal,
+            onLost: (reason) => {
+              if (sessionRef.current?.id !== id) return;
+              console.info(`[live] WebRTC が切れた: ${reason}。開き直す`);
+              // 開き直す(WebRTC をもう一度試し、だめなら HLS)
+              setRequest((r) => (r.cameraId === cameraId ? { ...r, n: r.n + 1 } : r));
+            },
+          });
+          if (cancelled) {
+            rtc.close();
+            return;
+          }
+          sessionRef.current = { cameraId, win, hls: null, rtc, frags: [], base: now, pendingSeek: null, id };
+          setLive({
+            transport: 'webrtc',
+            codec: rtc.codec,
+            fallback: null,
+            connecting: false,
+            relay: false,
+            firstFrameMs: rtc.firstFrameMs,
+            sessionId: id,
+          });
+          return;
+        } catch (e) {
+          if (cancelled) return;
+          fallback = e instanceof Error ? e.message : String(e);
+          console.info(`[live] WebRTC → HLS: ${fallback}`);
+        }
+      }
+      setLive(win.kind === 'live' ? { transport: 'hls', codec: null, fallback, connecting: false, relay: false, firstFrameMs: null } : null);
+
       let url: string;
       try {
         if (win.kind === 's3') url = api.vodUrl(cameraId, win.from!, win.to!);
@@ -164,6 +231,7 @@ export function usePlayback(processedUntil: (cameraId: string) => number | null)
         cameraId,
         win,
         hls: null,
+        rtc: null,
         frags: [],
         base: win.from ?? now,
         pendingSeek: target.kind === 'time' ? target.at : null,
@@ -272,8 +340,44 @@ export function usePlayback(processedUntil: (cameraId: string) => number | null)
     void run();
     return () => {
       cancelled = true;
+      abort.abort();
     };
-  }, [request, videoEl, support.engine, mediaTimeFor]);
+  }, [request, videoEl, support.engine, mediaTimeFor, override]);
+
+  // WebRTC の再生中は、実際に受けているコーデックと経路(TURN か)を getStats で確かめる
+  const rtcSessionId = live?.transport === 'webrtc' && !live.connecting ? live.sessionId : undefined;
+  useEffect(() => {
+    if (rtcSessionId === undefined) return;
+    const poll = () => {
+      const s = sessionRef.current;
+      if (!s?.rtc || s.id !== rtcSessionId) return;
+      void s.rtc
+        .stats()
+        .then((st) => {
+          if (sessionRef.current?.id !== rtcSessionId) return;
+          setLive((l) => {
+            if (!l || l.transport !== 'webrtc') return l;
+            const codec = st.codec ?? l.codec;
+            const relay = st.candidateType === 'relay';
+            return codec === l.codec && relay === l.relay ? l : { ...l, codec, relay };
+          });
+        })
+        .catch(() => undefined);
+    };
+    const first = window.setTimeout(poll, 1000);
+    const id = window.setInterval(poll, 5000);
+    return () => {
+      window.clearTimeout(first);
+      window.clearInterval(id);
+    };
+  }, [rtcSessionId]);
+
+  // E2E(scripts/e2e/browser.mjs)から読む
+  useEffect(() => {
+    const w = window as unknown as { __ccLive?: unknown; __ccLiveStats?: () => Promise<unknown> };
+    w.__ccLive = live;
+    w.__ccLiveStats = async () => sessionRef.current?.rtc?.stats() ?? null;
+  }, [live]);
 
   // ---- video 要素のイベント ----
 
@@ -371,6 +475,8 @@ export function usePlayback(processedUntil: (cameraId: string) => number | null)
     status,
     error,
     rate,
+    /** ライブの方式とコーデック(ライブでなければ null) */
+    live: source === 'live' ? live : null,
     open,
     togglePlay,
     setRate,
@@ -381,7 +487,9 @@ export function usePlayback(processedUntil: (cameraId: string) => number | null)
 function destroySession(s: Session | null, video: HTMLVideoElement | null) {
   if (!s) return;
   s.hls?.destroy();
-  if (!s.hls && video) {
+  s.rtc?.close();
+  if (video?.srcObject) video.srcObject = null;
+  if (!s.hls && !s.rtc && video) {
     video.removeAttribute('src');
     video.load();
   }

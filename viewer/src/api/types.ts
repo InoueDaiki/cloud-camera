@@ -92,6 +92,25 @@ export interface KvsHlsResponse {
   expires_at: string;
 }
 
+/** GET /api/cameras/{id}/webrtc(KVS WebRTC の視聴情報。AWS の認証情報は含まない) */
+export interface WebRtcSessionInfo {
+  camera_id?: string;
+  channel_name: string;
+  channel_arn: string;
+  region: string;
+  client_id: string;
+  wss_endpoint: string;
+  /** ConnectAsViewer の署名付き URL(299 秒で失効) */
+  wss_url: string;
+  ice_servers: RTCIceServer[];
+  /** エッジが出せるコーデック(H.265 が先) */
+  codecs: string[];
+  expires_at: string;
+  issue_ms?: number;
+  /** モック(MSW)のときだけ。ブラウザ内の疑似 master につなぐ */
+  mock?: boolean;
+}
+
 export interface SearchHit {
   camera_id: string;
   ts: string;

@@ -3,7 +3,7 @@
 #
 #   scripts/webrtc/measure/load.sh <視聴者数> <codec: h264|h265> [ラベル] [measure.mjs への追加引数...]
 #
-# 事前に edge/webrtc/compose.yaml のスタックと scripts/webrtc/serve.py を起動しておく。
+# 事前にエッジ(リポジトリ直下の compose。WebRTC の master を含む)と scripts/webrtc/serve.py を起動しておく。
 set -euo pipefail
 N="$1"; CODEC="$2"; LABEL="${3:-load-$CODEC-$N}"; shift 3 || shift $#
 DIR="$(cd "$(dirname "$0")" && pwd)"

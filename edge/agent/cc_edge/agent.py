@@ -11,7 +11,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
-from . import onvif, ptz
+from . import onvif, ptz, webrtc
 from .config import Config
 from .pipeline import Backoff, PipelineSpec, PipelineSupervisor
 
@@ -66,6 +66,11 @@ class CameraWorker:
         self.sup = PipelineSupervisor(
             camera_id, self._spec, self._on_event,
             Backoff(self.cfg.backoff_initial_s, self.cfg.backoff_max_s))
+        # KVS WebRTC のライブ(録画とは別の子プロセス。docs/webrtc.md)
+        self.webrtc = webrtc.MasterSupervisor(
+            camera_id, self._webrtc_spec, agent.report_soon,
+            Backoff(self.cfg.backoff_initial_s, self.cfg.backoff_max_s))
+        self._sub_cache: tuple[tuple, str] | None = None  # ((main の URL, sub のトークン), sub の RTSP URL)
 
     async def _spec(self, attempt: int) -> PipelineSpec:
         c = self.conf
@@ -117,12 +122,100 @@ class CameraWorker:
 
     def _on_event(self, kind: str, data: dict) -> None:
         self.agent.report_soon()
+        if kind == "streaming" and self.webrtc.running and self.webrtc.spec is not None:
+            # 録画側が ONVIF で取り直した URL やコーデックが変わっていたら、master も起動し直す
+            asyncio.get_running_loop().create_task(self._refresh_webrtc())
+
+    # --- WebRTC -----------------------------------------------------------
+    @property
+    def webrtc_wanted(self) -> bool:
+        return self.streaming_desired and webrtc.webrtc_enabled(self.conf) and self.cfg.webrtc_available
+
+    def sync_webrtc(self) -> None:
+        """desired(streaming と webrtc.enabled)に合わせて master を起動・停止する。録画のパイプラインには触らない。"""
+        if self.webrtc_wanted:
+            self.webrtc.start()
+        elif self.webrtc.running:
+            asyncio.get_running_loop().create_task(self._stop_webrtc())
+
+    async def _stop_webrtc(self) -> None:
+        await self.webrtc.stop()
+        self.agent.report_soon()
+
+    async def _refresh_webrtc(self) -> None:
+        try:
+            spec = await self._webrtc_spec(0)
+        except Exception as e:  # noqa: BLE001
+            log.warning("[%s] WebRTC の RTSP を取り直せない: %s", self.camera_id, e)
+            return
+        if spec is not None and not spec.same_media(self.webrtc.spec) and self.webrtc.running:
+            log.info("[%s] RTSP が変わったので WebRTC の master を起動し直す: %s", self.camera_id, spec.describe())
+            await self.webrtc.stop()
+            if self.webrtc_wanted:
+                self.webrtc.start()
+
+    def _resolve_sub_url(self, info: onvif.StreamInfo) -> tuple[str | None, str]:
+        """H.264 の視聴者向けの sub の RTSP URL とコーデック。ONVIF の GetStreamUri の結果はキャッシュする。"""
+        c = self.conf
+        prof = webrtc.select_sub_profile(info.profiles, info.profile_token)
+        if prof is None:
+            return None, "H264"
+        key = (info.rtsp_url, prof.token)
+        if self._sub_cache and self._sub_cache[0] == key:
+            return self._sub_cache[1], prof.encoding
+        cli = onvif.OnvifClient(c["onvif_url"], c.get("username", ""), c.get("password", ""))
+        cli.get_services()
+        url = cli.get_stream_uri(info.media_version, prof.token)
+        self._sub_cache = (key, url)
+        return url, prof.encoding
+
+    async def _webrtc_spec(self, attempt: int) -> webrtc.WebRtcSpec | None:
+        c, cfg = self.conf, self.cfg
+        if c.get("rtsp_url"):
+            # ONVIF を使わない設定(検証用)。sub は sub_rtsp_url(と sub_codec)で与える
+            main_url, main_codec = c["rtsp_url"], onvif.normalize_codec(c.get("codec"))
+            sub_url, sub_codec = c.get("sub_rtsp_url"), onvif.normalize_codec(c.get("sub_codec"), "H264")
+        else:
+            info = self.info
+            if info is None:
+                return None  # 録画側の ONVIF の解決を待つ
+            main_url, main_codec = info.rtsp_url, info.codec
+            sub_url, sub_codec = await asyncio.to_thread(self._resolve_sub_url, info)
+        return webrtc.WebRtcSpec(
+            camera_id=self.camera_id, channel=cfg.channel_name(self.camera_id),
+            main_rtsp_url=main_url, main_codec=main_codec, sub_rtsp_url=sub_url, sub_codec=sub_codec,
+            username=c.get("username", ""), password=c.get("password", ""), region=cfg.region,
+            iot_credential_endpoint=cfg.iot_credential_endpoint, cert_path=cfg.cert_path, key_path=cfg.key_path,
+            role_alias=cfg.role_alias, thing_name=cfg.thing, idle_stop_s=cfg.webrtc_idle_stop_s,
+            ice_transport_policy=cfg.webrtc_ice_transport_policy, log_level=cfg.webrtc_log_level,
+            binary=cfg.webrtc_bin,
+        )
+
+    def webrtc_reported(self) -> dict[str, Any]:
+        enabled = webrtc.webrtc_enabled(self.conf)
+        if not (enabled and self.streaming_desired):
+            state = webrtc.STATE_DISABLED
+        elif not self.cfg.webrtc_available:
+            state = webrtc.STATE_UNAVAILABLE
+        else:
+            state = self.webrtc.state if self.webrtc.running else webrtc.STATE_STARTING
+        live = state not in (webrtc.STATE_DISABLED, webrtc.STATE_UNAVAILABLE)
+        spec = self.webrtc.spec
+        return {
+            "enabled": enabled,
+            "channel": self.cfg.channel_name(self.camera_id),
+            "state": state,
+            "codecs": spec.codecs() if (spec and live) else [],
+            "viewers": self.webrtc.viewers if live else 0,
+            "error": self.webrtc.last_error if live and state == webrtc.STATE_ERROR else None,
+        }
 
     def start(self) -> None:
         self.sup.start()
+        self.sync_webrtc()
 
     async def stop(self) -> None:
-        await self.sup.stop()
+        await asyncio.gather(self.sup.stop(), self.webrtc.stop())
 
     @property
     def streaming_desired(self) -> bool:
@@ -145,6 +238,7 @@ class CameraWorker:
             "resolution": f"{w}x{h}" if w and h else None,
             "profile_token": info.profile_token if info else None,
             "error": err,
+            "webrtc": self.webrtc_reported(),
         }
 
     def status(self) -> dict[str, Any]:
@@ -160,6 +254,8 @@ class CameraWorker:
             # 回線断のバッファ(kvssink のときだけ。それ以外は null)。項目は docs/contracts.md
             "buffer": self.sup.buffer_status(),
             "last_exit": self.sup.last_exit,
+            # KVS WebRTC のライブ(視聴者数と送信量。項目は docs/contracts.md)
+            "webrtc": {**self.webrtc.status(), "state": self.webrtc_reported()["state"]},
         }
 
 
@@ -230,6 +326,9 @@ class Agent:
                 w.conf = dict(conf)
                 if cam in plan["start"] or cam in plan["restart"]:
                     w.start()
+                else:
+                    # webrtc.enabled だけの変更は録画のパイプラインを作り直さない
+                    w.sync_webrtc()
             self.confs = desired
             self.ptz.sync(desired)
         self.report_soon()

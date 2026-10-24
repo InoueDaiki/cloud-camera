@@ -46,6 +46,16 @@ output "kvs_streams" {
   value       = { for c, s in aws_kinesis_video_stream.camera : c => s.name }
 }
 
+output "webrtc_channels" {
+  description = "camera_id → {name, arn}(KVS WebRTC のシグナリングチャネル)"
+  value       = { for c, ch in awscc_kinesisvideo_signaling_channel.camera : c => { name = ch.name, arn = ch.arn } }
+}
+
+output "webrtc_channel_prefix" {
+  description = "シグナリングチャネル名の接頭辞(チャネル名 = 接頭辞 + カメラ ID)。エッジの config.json に書く"
+  value       = local.stream_name_prefix
+}
+
 output "cloudfront_url" {
   value = "https://${aws_cloudfront_distribution.main.domain_name}"
 }

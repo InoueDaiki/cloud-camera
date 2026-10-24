@@ -2,7 +2,9 @@
 
 2026-10-24、ap-northeast-1。今のライブ(KVS の HLS LIVE)は数秒遅れるので、PTZ の操作感のために KVS WebRTC(シグナリングチャネル)で
 低遅延のライブを出せるかを調べ、エッジのサイドカーとして試作した。録画は今までどおり kvssink で KVS ストリームへ(H.265)送る。
-契約([contracts.md](contracts.md))はまだ変えていない。本実装の提案は最後の節にまとめた。
+**本実装(2026-10-24)**: §8 の提案に沿って、master をエッジのイメージに統合し、視聴者ごとに H.265(main)/ H.264(sub)を選ぶようにした。
+契約は [contracts.md](contracts.md)(シャドウと status の `webrtc`、`GET /api/cameras/{id}/webrtc`)、決定は [decisions.md](decisions.md)。
+提案から変えた点は §10。
 
 試作のコードは [edge/webrtc/](../edge/webrtc/)(master のコンテナ)と [scripts/webrtc/](../scripts/webrtc/)(確認ビューワー、署名付き URL の発行、
 一時リソース、計測)。使い方は [edge/webrtc/README.md](../edge/webrtc/README.md)。
@@ -303,3 +305,14 @@ botocore の `SigV4QueryAuth`)。チャネルの ARN とエンドポイントは
 - 一時リソース(すべて `cc-tmp-webrtc` で始まる): IAM ロール、ロールエイリアス、IoT ポリシー、Thing、証明書、KVS ストリーム、シグナリングチャネル。
   `scripts/webrtc/tmp-aws.sh up / down / check`
 - 2026-10-24 の試作のあと `down` で削除し、`check` で何も残っていないことを確認した
+
+## 10. 本実装(§8 からの変更点)
+
+- **コーデックの既定は H.265**(§1 の結論の「H.264 を基本」から変更。ユーザーの決定)。ビューワーは `RTCRtpReceiver.getCapabilities` に H.265 があれば
+  H.265 → H.264 の順で offer に載せ、master が offer の並びを見て main(H.265)か sub(H.264)を流す。H.265 の視聴者と H.264 の視聴者が同時にいれば
+  main と sub の両方の RTSP を読む(1 プロセスで両方。§8 の `profile` / `h265_profile` の設定は作らなかった)
+- シャドウの desired は `webrtc.enabled` だけ。reported は `enabled`、`channel`、`state`、`codecs`、`viewers`、`error`
+- チャネルは Terraform の awscc プロバイダー(`awscc_kinesisvideo_signaling_channel`)。hashicorp/aws 6.70 にはリソースがない。IAM はチャネルの ARN を個別に指定
+- API はシャドウを先に見て、WebRTC で見られないカメラ(無効、オフライン、master が `CONNECTED` でない)は 409 を返す(ビューワーはすぐ HLS へ)
+- ビューワーは KVS の JS SDK(2.9.0、npm で固定)のブラウザ向けバンドルを遅延読み込みする(npm の lib/ は Node の `events` と `ws` を require するため)
+- PTZ の操作は WebRTC のライブ再生中だけ(HLS のときは無効にし、「ライブ」で WebRTC につなぎ直せると案内する)

@@ -180,6 +180,11 @@ detector 1,024 MB(infra の既定)・1.5 秒 + 60 枚 × 0.135 秒(yolox_tiny IN
   同じ detector の設定(1,024 MB・実測の推論時間)で GetImages だけ戻すと $77.24(`--sprite-images-per-minute 61 --archiver-duration-s 1.9 --sprite-kb 80
   --detector-frame-source getimages --detector-overhead-s 2.0`)。B 案はこれより 1 台・月 約 $52 安い(FRAMES.md の見積もりと同じ)
 - 大きいのは **加工・保存**(S3 の動画の保存)、**動画抽出**(KVS の HLS 取り出し $4.6 + video_archiver の Lambda $0.92)、**物体検出**(detector の Lambda $5.53)
+- **KVS WebRTC のライブ**(2026-10-24 追加): チャネル $0.045 / 台・月、メッセージ $3.375 / 100 万件、TURN $0.18 / 1,000 分(東京、docs/webrtc.md §4)。
+  既定(WebRTC で 1 時間 / 台・月、1 時間に 4 回接続、1 回 20 件、半分が TURN)で **+$0.05 / 台・月**(合計 $24.82 → $24.87)。
+  P2P なら映像の転送料はかからない。1 日 1 時間を全部 TURN で見ても +$0.41(`--webrtc-view-hours 30 --webrtc-turn-ratio 1`)。
+  WebRTC の 3 つの単価は SSO が切れて Pricing API を呼べなかったため、docs/webrtc.md §4 で Price List の index.json から確認した値を単価表に転記した(`note` 欄。次に `prices` を取り直すと置き換わる)。
+  実測(`measure`)にはまだ WebRTC の項目がない(CloudWatch の `AWS/KinesisVideo` のシグナリングのメトリクスから取れる見込み)
 - 検出を 5 秒おきにすると合計 $20.99、検出なしで $18.53(`--detect-interval-s 5` / `0`)
 - 構想.md の試算例(1 Mbps、US East $0.0085 で取り込み約 $2.75)は、東京の $0.010965 で **$3.31**(GB = 2^30 バイト、301.7 GB)。
   構想.md と同じく 10^9 バイト = 1 GB として数えると 324 GB × $0.010965 = $3.55。保持 1 時間分の保存は $0.0105、HLS で 1 時間視聴は $0.0064

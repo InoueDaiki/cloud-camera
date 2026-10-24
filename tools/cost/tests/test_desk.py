@@ -81,3 +81,17 @@ def test_recording_ratio_reduces_ingest():
 def test_x86_architecture_uses_x86_price():
     lines = desk.build_lines(desk.DeskParams(architecture="x86_64"))
     assert line(lines, "Lambda detector 実行").price_key == "lambda.gb_s.x86_64"
+
+
+def test_webrtc_lines():
+    """WebRTC のライブ: チャネル 1 本 / 台・月、メッセージは接続回数に比例、TURN は経由する割合だけ。"""
+    lines = desk.build_lines(desk.DeskParams(webrtc_view_hours=30, webrtc_sessions_per_view_hour=1,
+                                             webrtc_messages_per_session=20, webrtc_turn_ratio=1.0))
+    assert line(lines, "KVS WebRTC シグナリングチャネル").qty == 1
+    assert line(lines, "KVS WebRTC シグナリングメッセージ").qty == pytest.approx(600)
+    assert line(lines, "KVS WebRTC TURN").qty == pytest.approx(1800)
+    r = compute(lines, BOOK, 1)
+    turn = next(x for x in r.lines if x.line.label == "KVS WebRTC TURN")
+    assert turn.cost == pytest.approx(1800 * 0.00018)  # 1 日 1 時間を全部 TURN で見ると $0.32(docs/webrtc.md)
+    p2p = compute(desk.build_lines(desk.DeskParams(webrtc_view_hours=30, webrtc_turn_ratio=0.0)), BOOK, 1)
+    assert next(x for x in p2p.lines if x.line.label == "KVS WebRTC TURN").cost == 0
