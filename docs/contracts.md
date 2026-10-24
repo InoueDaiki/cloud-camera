@@ -76,10 +76,11 @@ PK `camera_id`(S)、SK `sk`(S)。TTL 属性 `expires_at`(数値、epoch 秒)。
 | 属性 | 書く人 | 型 | 内容 |
 | --- | --- | --- | --- |
 | `video_status` | video_archiver | S | `DONE` / `EMPTY` / `FAILED` |
-| `segments` | video_archiver | L | 録画がある範囲 `[[開始ms, 終了ms], ...]`(epoch ミリ秒の数値ペア) |
+| `segments` | video_archiver | L | 録画がある範囲 `[[開始ms, 終了ms], ...]`(epoch ミリ秒の数値ペア)。断片は開始時刻の区間に入るので、最後の終わりは区間の終わりを断片 1 本ぶんまで越えることがある |
 | `files` | video_archiver | M | `{"clip": key, "playlist": key, "sprite": key}` |
 | `hls` | video_archiver | M | `{"init_length": n, "parts": [[offset, length, duration_ms], ...]}`。API が複数区間のプレイリストを組むのに使う |
 | `fragment_count` / `bytes` | video_archiver | N | 実測値 |
+| `sprite_frames` / `sprite_error` | video_archiver | N / S | スプライトに入ったコマ数(0〜60)、画像が取れなかった理由(あれば) |
 | `video_duration_ms` / `video_attempts` | video_archiver | N | 実行時間、試行回数 |
 | `video_error` / `detect_error` | 各自(共通処理) | S | 最後の失敗の理由。成功したら消える |
 | `detect_status` | detector | S | `DONE` / `EMPTY` / `FAILED` |

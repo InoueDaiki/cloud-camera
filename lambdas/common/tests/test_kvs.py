@@ -40,9 +40,20 @@ def test_build_segments_joins_small_gaps():
           frag(3, T(10, 20, 10), 2000),  # 7.6s の隙間 → 分ける
           frag(4, T(10, 20, 12, 500), 1000)]  # ちょうど 500ms → つなぐ
     segs = kvs.build_segments(fr)
-    assert segs == [[epoch_ms(T(10, 20, 0)), epoch_ms(T(10, 20, 2, 400))],
-                    [epoch_ms(T(10, 20, 10)), epoch_ms(T(10, 20, 13, 500))]]
+    # 隙間の中央値は 450ms だが、末尾の補正は最大 250ms
+    assert segs == [[epoch_ms(T(10, 20, 0)), epoch_ms(T(10, 20, 2, 650))],
+                    [epoch_ms(T(10, 20, 10)), epoch_ms(T(10, 20, 13, 750))]]
     assert kvs.build_segments([]) == []
+
+
+def test_effective_durations_adds_last_frame():
+    # 実測と同じ形: 1 秒ごとの断片で長さ 933ms(最後の 1 フレーム 67ms ぶん短い)
+    fr = [frag(i, T(10, 20, i, 979), 933) for i in range(3)] + [frag(9, T(10, 20, 30, 0), 933)]
+    assert kvs.effective_durations(fr) == [1000, 1000, 1000, 1000]
+    segs = kvs.build_segments(fr)
+    assert segs == [[epoch_ms(T(10, 20, 0, 979)), epoch_ms(T(10, 20, 3, 979))],
+                    [epoch_ms(T(10, 20, 30)), epoch_ms(T(10, 20, 31))]]
+    assert kvs.effective_durations([frag(1, T(10, 20), 933)]) == [933]
 
 
 def _stub_endpoint(monkeypatch, endpoints):
@@ -103,6 +114,51 @@ def test_list_fragments_filters_sorts_and_pages(monkeypatch):
     assert [x.number for x in got] == ["2", "3", "5"]
     assert got[0].producer_ms == epoch_ms(T(10, 20)) and got[0].length_ms == 1000
     st.assert_no_pending_responses()
+
+
+def test_list_fragments_server_timestamp(monkeypatch):
+    st = _archived(monkeypatch)
+    st.add_response("list_fragments", {"Fragments": [
+        {"FragmentNumber": "1", "FragmentSizeInBytes": 1, "ProducerTimestamp": T(10, 0), "ServerTimestamp": T(10, 20, 5),
+         "FragmentLengthInMilliseconds": 1000},
+        {"FragmentNumber": "2", "FragmentSizeInBytes": 1, "ProducerTimestamp": T(10, 20, 5), "ServerTimestamp": T(10, 25),
+         "FragmentLengthInMilliseconds": 1000}]},
+        {"StreamName": "s", "MaxResults": 1000, "FragmentSelector": {
+            "FragmentSelectorType": "SERVER_TIMESTAMP", "TimestampRange": {"StartTimestamp": T(10, 20), "EndTimestamp": T(10, 21)}}})
+    st.activate()
+    got = kvs.list_fragments("s", T(10, 20), T(10, 21), selector="SERVER_TIMESTAMP")
+    assert [f.number for f in got] == ["1"]  # サーバー時刻で絞り込む
+
+
+class TestMinuteReady:
+    def _patch(self, monkeypatch, frags):
+        calls = []
+
+        def lf(stream, start, end, selector="PRODUCER_TIMESTAMP"):
+            calls.append((start, end, selector))
+            return frags
+
+        monkeypatch.setattr(kvs, "list_fragments", lf)
+        return calls
+
+    def test_passed(self, monkeypatch):
+        calls = self._patch(monkeypatch, [frag(1, T(10, 20, 59)), frag(2, T(10, 21, 0, 500))])
+        assert kvs.minute_ready("s", T(10, 21), T(10, 21, 40)) == (True, "passed")
+        assert calls == [(T(10, 21, 10), T(10, 21, 45), "SERVER_TIMESTAMP")]
+
+    def test_producer_behind(self, monkeypatch):
+        self._patch(monkeypatch, [frag(1, T(10, 20, 30)), frag(2, T(10, 20, 31))])
+        ready, why = kvs.minute_ready("s", T(10, 21), T(10, 21, 40))
+        assert not ready and why.startswith("producer_behind") and "29.0s" in why
+
+    def test_quiet(self, monkeypatch):
+        self._patch(monkeypatch, [])
+        assert kvs.minute_ready("s", T(10, 21), T(10, 21, 40)) == (True, "quiet")
+
+    def test_max_wait(self, monkeypatch):
+        calls = self._patch(monkeypatch, [frag(1, T(10, 20, 30))])
+        assert kvs.minute_ready("s", T(10, 21), T(10, 31), max_wait_seconds=600) == (True, "max_wait")
+        assert calls == []
 
 
 def test_get_images_pages_and_decodes(monkeypatch):

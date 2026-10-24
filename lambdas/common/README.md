@@ -86,7 +86,8 @@ def lambda_handler(event, context):
 | `get_data_endpoint(stream, api)` | GetDataEndpoint をプロセス内で 1 時間キャッシュ |
 | `archived_media_client(stream, api)` | データエンドポイント向けの `kinesis-video-archived-media` クライアント(キャッシュ) |
 | `list_fragments(stream, start, end)` | ListFragments(プロデューサー時刻)をページ送りし、**開始時刻が `[start, end)`** の断片を時刻順に返す |
-| `build_segments(fragments, gap_ms=500)` | 断片の隙間が 500ms 以内ならつないだ録画範囲 `[[開始ms, 終了ms], ...]` |
+| `effective_durations(fragments, gap_ms=500)` | 断片の実際の長さ。`FragmentLengthInMilliseconds` は最後の 1 フレーム分短い(実測)ので、次の断片の開始までを長さとする |
+| `build_segments(fragments, gap_ms=500)` | 断片の隙間が 500ms 以内ならつないだ録画範囲 `[[開始ms, 終了ms], ...]`(長さは `effective_durations`) |
 | `get_images(stream, start, end, interval_ms=, width=, height=)` | GetImages(プロデューサー時刻)をページ送りして時刻順に返す |
 
 ## ログ

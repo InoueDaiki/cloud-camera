@@ -289,6 +289,28 @@ def test_unknown_kind(table, clock):
         run(table, clock, Recorder(), kind="AUDIO")
 
 
+def test_not_ready_stops_without_counting_attempt(table, clock):
+    from common import NotReady
+
+    calls = []
+
+    def proc(camera_id, start, end):
+        calls.append(start)
+        if start == T(10, 26):
+            raise NotReady("producer_behind")
+        return MinuteResult("EMPTY")
+
+    for _ in range(5):  # 何回待っても FAILED にならない
+        calls.clear()
+        res = run(table, clock, proc)
+        assert res["stopped"] == "not_ready"
+    assert calls == [T(10, 26)]
+    assert cursor(table)["processed_until"] == "2026-10-24T10:26:00Z"
+    it = item(table, "2026-10-24T10:26:00Z")
+    assert it["video_attempts"] == 0 and "video_status" not in it and "video_error" not in it
+    assert res["minutes"][-1]["not_ready"] == "producer_behind"
+
+
 def test_table_from_env(table, clock):
     res = run_pipeline("VIDEO", CAM, Recorder(), lag_seconds=30, max_minutes=1, max_attempts=3, now=clock)
     assert res["processed_until"] == "2026-10-24T10:25:00Z"

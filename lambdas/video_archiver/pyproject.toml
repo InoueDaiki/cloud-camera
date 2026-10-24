@@ -1,0 +1,19 @@
+[project]
+name = "cloud-camera-video-archiver"
+version = "0.1.0"
+description = "動画の退避 Lambda(KVS → S3、1 分ごと)"
+requires-python = ">=3.13"
+# zip に同梱する実行時の依存(boto3 は Lambda のランタイムのものを使う)
+dependencies = ["pillow>=11"]
+
+[dependency-groups]
+dev = ["boto3", "moto[dynamodb,s3]>=5", "pytest>=8"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+# handler / archiver と、lambdas/common を `common` として読む
+pythonpath = [".", ".."]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"

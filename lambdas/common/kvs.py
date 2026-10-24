@@ -12,7 +12,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import boto3
@@ -105,11 +105,12 @@ class Fragment:
         return self.producer_ms + self.length_ms
 
 
-def list_fragments(stream_name: str, start: datetime, end: datetime) -> list[Fragment]:
+def list_fragments(stream_name: str, start: datetime, end: datetime, *, selector: str = "PRODUCER_TIMESTAMP") -> list[Fragment]:
     """プロデューサー時刻が [start, end) で始まる断片を、時刻順に返す。
 
     区間をまたぐ断片は「開始時刻が属する区間」に割り当てる、という方針をここで実現する。
     ListFragments の範囲指定の端の扱いに依存しないよう、開始時刻で改めて絞り込む。
+    selector="SERVER_TIMESTAMP" なら、サーバー時刻(KVS に届いた時刻)が [start, end) の断片を返す。
     """
     client = archived_media_client(stream_name, LIST_FRAGMENTS)
     start_ms, end_ms = epoch_ms(start), epoch_ms(end)
@@ -117,7 +118,7 @@ def list_fragments(stream_name: str, start: datetime, end: datetime) -> list[Fra
         "StreamName": stream_name,
         "MaxResults": 1000,
         "FragmentSelector": {
-            "FragmentSelectorType": "PRODUCER_TIMESTAMP",
+            "FragmentSelectorType": selector,
             "TimestampRange": {"StartTimestamp": to_utc(start), "EndTimestamp": to_utc(end)},
         },
     }
@@ -132,7 +133,8 @@ def list_fragments(stream_name: str, start: datetime, end: datetime) -> list[Fra
                 length_ms=int(f.get("FragmentLengthInMilliseconds", 0)),
                 size=int(f.get("FragmentSizeInBytes", 0)),
             )
-            if start_ms <= fr.producer_ms < end_ms:
+            t = fr.producer_ms if selector == "PRODUCER_TIMESTAMP" else fr.server_ms
+            if start_ms <= t < end_ms:
                 seen[fr.number] = fr
         token = resp.get("NextToken")
         if not token:
@@ -141,11 +143,74 @@ def list_fragments(stream_name: str, start: datetime, end: datetime) -> list[Fra
     return sorted(seen.values(), key=lambda x: (x.producer_ms, int(x.number)))
 
 
+def minute_ready(
+    stream_name: str,
+    end: datetime,
+    now: datetime,
+    *,
+    quiet_seconds: int = 30,
+    max_wait_seconds: int = 600,
+) -> tuple[bool, str]:
+    """区間 [.., end) の断片が出そろったかを判定する(遅れて届く断片の取りこぼしを防ぐ)。
+
+    プロデューサー(エッジ)の送信が遅れていると、区間の終わりから lag が過ぎても断片がまだ届いていない
+    (実測: 送信側の CPU 不足で、届くのが 70 秒遅れた)。KVS へは時刻順に届くので、次の条件で「出そろった」とみなす。
+
+    - 最近 quiet_seconds 秒に届いた断片のうち、プロデューサー時刻が end 以降のものがある(送信が end を越えた)
+    - 最近 quiet_seconds 秒に届いた断片がない(送信が止まっている。止まる前の断片はすべて届いている)
+    - 区間の終わりから max_wait_seconds 秒が過ぎた(待ちすぎ。そのとき届いている分で処理する)
+
+    戻り値は (出そろったか, 理由)。ListFragments(サーバー時刻)を 1 回呼ぶ。
+    """
+    now = to_utc(now)
+    waited = (now - to_utc(end)).total_seconds()
+    if waited >= max_wait_seconds:
+        return True, "max_wait"
+    recent = list_fragments(
+        stream_name, now - timedelta(seconds=quiet_seconds), now + timedelta(seconds=5), selector="SERVER_TIMESTAMP"
+    )
+    if not recent:
+        return True, "quiet"
+    newest = max(f.producer_ms for f in recent)
+    if newest >= epoch_ms(end):
+        return True, "passed"
+    return False, f"producer_behind: newest producer {(epoch_ms(end) - newest) / 1000:.1f}s before end"
+
+
+MAX_PAD_MS = 250
+
+
+def effective_durations(fragments: list[Fragment], gap_ms: int = 500) -> list[int]:
+    """断片ごとの実際の長さ(ミリ秒)。fragments は時刻順。
+
+    FragmentLengthInMilliseconds は「最後のフレームの開始 − 最初のフレームの開始」で、最後の 1 フレーム分
+    (15fps なら 67ms)短い(実測: 1 秒ごとの断片で 933ms)。そこで
+    - 次の断片が gap_ms 以内に続くなら「次の開始 − この開始」
+    - そうでなければ長さ + 隙間の中央値(1 フレーム分の推定。最大 MAX_PAD_MS)
+    """
+    slacks = sorted(
+        n.producer_ms - f.end_ms for f, n in zip(fragments, fragments[1:]) if 0 <= n.producer_ms - f.end_ms <= gap_ms
+    )
+    pad = min(slacks[len(slacks) // 2], MAX_PAD_MS) if slacks else 0
+    out = []
+    for i, f in enumerate(fragments):
+        nxt = fragments[i + 1] if i + 1 < len(fragments) else None
+        if nxt is not None and 0 <= nxt.producer_ms - f.end_ms <= gap_ms:
+            out.append(nxt.producer_ms - f.producer_ms)
+        else:
+            out.append(f.length_ms + pad)
+    return out
+
+
 def build_segments(fragments: list[Fragment], gap_ms: int = 500) -> list[list[int]]:
-    """断片の [開始, 終了] を並べ、隙間が gap_ms 以内ならつないだ録画範囲(epoch ミリ秒)を返す。"""
+    """断片の [開始, 終了] を並べ、隙間が gap_ms 以内ならつないだ録画範囲(epoch ミリ秒)を返す。
+
+    終了は effective_durations で補正した長さを使う。
+    """
+    frs = sorted(fragments, key=lambda x: x.producer_ms)
     segs: list[list[int]] = []
-    for f in sorted(fragments, key=lambda x: x.producer_ms):
-        s, e = f.producer_ms, f.end_ms
+    for f, d in zip(frs, effective_durations(frs, gap_ms)):
+        s, e = f.producer_ms, f.producer_ms + d
         if segs and s - segs[-1][1] <= gap_ms:
             segs[-1][1] = max(segs[-1][1], e)
         else:

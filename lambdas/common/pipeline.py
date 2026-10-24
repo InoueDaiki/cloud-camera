@@ -62,8 +62,11 @@ class MinuteResult:
 ProcessMinute = Callable[[str, datetime, datetime], MinuteResult]
 
 
-class _LeaseLost(Exception):
-    pass
+class NotReady(Exception):
+    """process_minute が「まだ処理できない」(断片が出そろっていない等)ときに投げる。
+
+    失敗として数えない(試行回数を戻す)。カーソルはその区間の手前で止まり、次の起動で再挑戦する。
+    """
 
 
 def _table(table: Any | None):
@@ -259,7 +262,7 @@ def _loop(
             budget_ms = max(budget_ms, took)
         if rec["status"] is None:
             # 確定しなかった: カーソルはここで止め、次の起動で再挑戦
-            summary["stopped"] = "retry"
+            summary["stopped"] = "not_ready" if rec.get("not_ready") else "retry"
             return
         # 4. 確定したのでカーソルを進める(自分がリースを持っているときだけ)
         try:
@@ -342,6 +345,15 @@ def _process_one(
         result = process_minute(camera_id, start, end)
         if result.status not in ("DONE", "EMPTY", "FAILED"):
             raise ValueError(f"invalid status from process_minute: {result.status!r}")
+    except NotReady as e:
+        tbl.update_item(
+            Key=key,
+            UpdateExpression=f"ADD {attempts_attr} :m",
+            ExpressionAttributeValues={":m": -1},
+        )
+        rec.update(status=None, not_ready=str(e), attempt=attempt - 1)
+        log("minute_not_ready", camera_id=camera_id, kind=p, start=sk, reason=str(e))
+        return rec
     except Exception as e:  # noqa: BLE001 - 区間ごとの失敗はすべて捕まえて記録する
         duration_ms = int((time.monotonic() - t0) * 1000)
         reason = _err_str(e)
