@@ -52,7 +52,7 @@ def get_detector() -> Detector:
         model = os.environ.get("DETECT_MODEL", DEFAULT_MODEL)
         _detector = Detector(
             os.path.join(HERE, "models", f"{model}.onnx"),
-            input_width=_env_int("DETECT_INPUT_WIDTH", 416),
+            input_width=_env_int("DETECT_INPUT_WIDTH", 640),
             threads=_env_int("DETECT_THREADS", 0),
             batch_size=_env_int("DETECT_BATCH", 1),
             score_threshold=_env_float("DETECT_SCORE_THRESHOLD", 0.3),

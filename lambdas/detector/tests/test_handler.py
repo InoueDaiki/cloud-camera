@@ -66,7 +66,7 @@ def test_process_minute_writes_rows(env, monkeypatch, capsys):
     start = datetime(2026, 10, 24, 10, 20, tzinfo=UTC)
     calls = _fake_kvs(monkeypatch, start, n=60, gaps={5, 6})
     res = handler.process_minute("cam-001", start, start + timedelta(minutes=1))
-    assert calls["stream"] == "cc-test-cam-001" and calls["size"] == (416, 234)
+    assert calls["stream"] == "cc-test-cam-001" and calls["size"] == (640, 360)
     assert res.status == "DONE"
     assert res.attributes["frame_count"] == 58
     t = pq.read_table(io.BytesIO(

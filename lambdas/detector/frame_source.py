@@ -65,10 +65,10 @@ def _get_images(stream: str, start: datetime, end: datetime, fragments, width: i
 def getimages(camera_id: str, start: datetime, end: datetime) -> FrameBatch:
     """KVS の GetImages で [start, end) を 1 秒間隔の JPEG として取る(録画がなければ呼ばない)。
 
-    サイズは環境変数 DETECT_INPUT_WIDTH(既定 416)と DETECT_IMAGE_HEIGHT(既定は幅 × 9/16)。
+    サイズは環境変数 DETECT_INPUT_WIDTH(既定 640)と DETECT_IMAGE_HEIGHT(既定は幅 × 9/16)。
     GetImages は幅と高さを両方指定する必要がある(片方だけだと InvalidArgumentException)。
     """
-    width = int(os.environ.get("DETECT_INPUT_WIDTH") or 416)
+    width = int(os.environ.get("DETECT_INPUT_WIDTH") or 640)
     height = int(os.environ.get("DETECT_IMAGE_HEIGHT") or round(width * 9 / 16))
     stream = kvs.stream_name_for(camera_id)
     t = time.perf_counter()

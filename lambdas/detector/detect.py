@@ -176,7 +176,7 @@ class Detector:
         self,
         model_path: str,
         *,
-        input_width: int = 416,
+        input_width: int = 640,
         threads: int = 0,
         batch_size: int = 1,
         graph_opt: str = "all",

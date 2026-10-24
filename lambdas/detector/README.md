@@ -5,7 +5,7 @@ EventBridge Scheduler から 1 分ごとに `{"camera_id": "cam-001"}` で起動
 
 1. `kvs.minute_ready` で断片が出そろったかを確かめる(送信が遅れていれば `NotReady` で次の起動に回す)
 2. `handler.FRAME_SOURCE(camera_id, start, end)` でフレームを取る。既定の `frame_source.getimages` は ListFragments で録画の有無を見て、
-   あれば **GetImages で 1 秒間隔の JPEG(最大 60 枚、既定 416×234)** を取る。画像は S3 に置かない
+   あれば **GetImages で 1 秒間隔の JPEG(最大 60 枚、既定 640×360)** を取る。画像は S3 に置かない
 3. メモリ上で前処理(レターボックス)→ ONNX Runtime(CPU)で推論 → クラスごとの NMS
 4. その日の Parquet(`detections/dt=YYYY-MM-DD/{camera_id}.parquet`)の **その 1 分の行を置き換える**(条件付き PUT)
 5. 区間の件に `detect_count`、`frame_count` を返す(`detect_status` などは共通処理が書く)
@@ -49,7 +49,7 @@ Pricing API で確認。1 分の所要 = 60 枚の処理 + 2.1 秒(GetImages と
   障害後の追い上げで、1 回の起動で `MAX_MINUTES`(Terraform の既定 10)区間を処理すると 1,024 MB なら約 70 秒、512 MB なら約 100 秒(タイムアウト 300 秒の内)。
 - 1 vCPU(1,769 MB)以下では時間がメモリにほぼ反比例するので GB 秒(= 推論の費用)はほぼ一定で、
   I/O 待ち(GetImages など約 2 秒)の分だけ小さいメモリが安い。1,769 MB を超えると 2 スレッド目が効き始めるが、費用は増える。
-- 小さい人をもっと拾いたいときは `DETECT_INPUT_WIDTH=640`(416 の約 2.2 倍の時間、person の再現率 0.61 → 0.94)。
+- **既定は入力幅 640**(2026-10-24 に 416 から変更)。416 の約 2.2 倍の時間(1,024 MB で推論 8.2 秒、取得込みで約 10.5 秒/分、月 約 $6)だが、person の再現率が 0.61 → 0.94 に上がるため。費用を優先するときは `DETECT_INPUT_WIDTH=416`。
 - 同じ設定でも実行環境で ±30% ほどばらつく(arm64 / 1,024 MB / tiny INT8 が 1 回目 5.8 秒、別の時間帯で 3.9 秒)。表の 1,024 MB 以下は 2 回目の計測。
 - 表の時間は**推論側だけ**(JPEG デコード、前処理、推論、NMS)。フレームの取得(ListFragments + GetImages、3 ページ)は別で、
   実 KVS の通しで **約 1.9 秒**(メモリによらずほぼ一定、I/O 待ち)。Parquet の読み書きは 0.1〜0.2 秒。
