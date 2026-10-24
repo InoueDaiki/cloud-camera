@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import io
-import logging
 import random
 import time
 from dataclasses import dataclass, field
@@ -21,7 +20,8 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-log = logging.getLogger(__name__)
+from common import log as jlog
+
 
 SCHEMA = pa.schema(
     [
@@ -145,7 +145,7 @@ def replace_minute(
             stats.write_ms += (time.perf_counter() - t) * 1000
             if not _is_conflict(e):
                 raise
-            log.warning("条件付き PUT が競合したので読み直す", extra={"key": key, "attempt": attempt})
+            jlog("parquet_conflict", key=key, attempt=attempt, error=str(e)[:200])
             time.sleep(min(2.0, 0.1 * 2**attempt) * random.random())
             continue
         stats.write_ms += (time.perf_counter() - t) * 1000

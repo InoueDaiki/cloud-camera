@@ -10,6 +10,14 @@ from conftest import FIXTURES, MODELS
 from detect import Detector, Frame, input_size_for, nms, postprocess, preprocess
 
 
+def test_model_label():
+    from detect import model_label
+
+    assert model_label("/x/models/yolox_tiny.int8.onnx") == "yolox_tiny_int8"
+    assert model_label("models/yolox_nano.dyn.onnx") == "yolox_nano"
+    assert model_label("yolox_nano.onnx") == "yolox_nano"
+
+
 def test_input_size_for_16_9():
     assert input_size_for(1920, 1080, 416) == (256, 416)
     assert input_size_for(416, 234, 416) == (256, 416)

@@ -5,8 +5,8 @@ GetImages で 1 分区間を 1 秒間隔の JPEG(最大 60 枚)として取得 �
 
 環境変数(Terraform と合意済み): STATE_TABLE, DETECTIONS_BUCKET, STREAM_NAME_PREFIX, LAG_SECONDS,
 MAX_MINUTES, MAX_ATTEMPTS, MEDIA_RETENTION_DAYS
-モデル関係(省略時は既定値): DETECT_MODEL, DETECT_INPUT_WIDTH, DETECT_THREADS, DETECT_BATCH,
-DETECT_SCORE_THRESHOLD, DETECT_NMS_THRESHOLD
+モデル関係(省略時は既定値): DETECT_MODEL, DETECT_INPUT_WIDTH, DETECT_IMAGE_HEIGHT, DETECT_THREADS,
+DETECT_BATCH, DETECT_SCORE_THRESHOLD, DETECT_NMS_THRESHOLD
 """
 
 from __future__ import annotations
@@ -90,11 +90,14 @@ def process_minute(camera_id: str, start: datetime, end: datetime) -> MinuteResu
     stream = kvs.stream_name_for(camera_id)
     detector = get_detector()
     width = detector.fixed_hw[1] if detector.fixed_hw else detector.input_width
+    # GetImages は幅と高さを両方指定する必要がある(片方だけだと InvalidArgumentException)。
+    # 既定は 16:9。カメラのアスペクト比が違うときは DETECT_IMAGE_HEIGHT で合わせる
+    height = _env_int("DETECT_IMAGE_HEIGHT", round(width * 9 / 16))
 
     # 1. 取得(録画がなければ GetImages を呼ばない)
     t = time.perf_counter()
     fragments = kvs.list_fragments(stream, start, end)
-    images = kvs.get_images(stream, start, end, interval_ms=1000, width=width) if fragments else []
+    images = kvs.get_images(stream, start, end, interval_ms=1000, width=width, height=height) if fragments else []
     ok = [im for im in images if im.content and not im.error and
           start.timestamp() * 1000 <= im.ts_ms < end.timestamp() * 1000]
     errors: dict[str, int] = {}

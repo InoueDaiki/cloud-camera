@@ -162,6 +162,13 @@ def postprocess(
     return dets
 
 
+def model_label(model_path: str) -> str:
+    """Parquet の model 列に入れる名前。yolox_tiny.int8.onnx → yolox_tiny_int8、yolox_nano.dyn.onnx → yolox_nano。"""
+    stem = os.path.basename(model_path).removesuffix(".onnx")
+    parts = [p for p in stem.split(".") if p != "dyn"]
+    return "_".join(parts)
+
+
 class Detector:
     """ONNX Runtime のセッションを持ち、JPEG のリストをまとめて推論する。"""
 
@@ -191,6 +198,8 @@ class Detector:
             so.intra_op_num_threads = threads
         so.inter_op_num_threads = 1
         so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        # Lambda では書き込めない場所へのテレメトリ ID 保存などの警告が出るので、エラーだけにする
+        so.log_severity_level = 3
         self.session = ort.InferenceSession(model_path, so, providers=["CPUExecutionProvider"])
         self.load_ms = (time.perf_counter() - t0) * 1000
         inp = self.session.get_inputs()[0]
@@ -204,7 +213,7 @@ class Detector:
         self.square = square
         self.score_threshold = score_threshold
         self.nms_threshold = nms_threshold
-        self.model_name = os.path.basename(model_path).split(".")[0]
+        self.model_name = model_label(model_path)
 
     def input_hw(self, width: int, height: int) -> tuple[int, int]:
         if self.fixed_hw:

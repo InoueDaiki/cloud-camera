@@ -4,6 +4,8 @@ GetImages に WidthPixels を指定したときと同じく、幅 w・アスペ�
 bench_frames/{w}/000.jpg〜059.jpg に書く。元画像を少しずつずらして切り出し、動きを模擬する。
 
 使い方: uv run python tools/make_bench_frames.py models/calib bench_frames --widths 320,416,512,640
+       uv run python tools/make_bench_frames.py frames/ bench_frames --sequence
+       (--sequence: 動画から 1 秒ごとに切り出した連番 JPEG を、そのまま各幅に縮小する。足りなければ先頭から繰り返す)
 """
 
 from __future__ import annotations
@@ -21,12 +23,24 @@ def main() -> None:
     ap.add_argument("out_dir")
     ap.add_argument("--widths", default="320,416,512,640")
     ap.add_argument("--count", type=int, default=60)
+    ap.add_argument("--sequence", action="store_true")
     a = ap.parse_args()
+    widths = [int(w) for w in a.widths.split(",")]
+    if a.sequence:
+        files = sorted(glob.glob(os.path.join(a.src_dir, "*.jpg")))
+        for n in range(a.count):
+            img = Image.open(files[n % len(files)]).convert("RGB")
+            for tw in widths:
+                d = os.path.join(a.out_dir, str(tw))
+                os.makedirs(d, exist_ok=True)
+                th = round(img.height * tw / img.width)
+                img.resize((tw, th), Image.BILINEAR).save(os.path.join(d, f"{n:03d}.jpg"), quality=85)
+        print(f"{a.count} フレーム x {len(widths)} サイズ → {a.out_dir}")
+        return
     # 人が写っている画像を優先(person, kite, horses)
     srcs = [p for name in ("person", "kite", "horses", "dog")
             for p in glob.glob(os.path.join(a.src_dir, f"{name}.jpg"))]
     per = -(-a.count // len(srcs))
-    widths = [int(w) for w in a.widths.split(",")]
     n = 0
     for p in srcs:
         img = Image.open(p).convert("RGB")

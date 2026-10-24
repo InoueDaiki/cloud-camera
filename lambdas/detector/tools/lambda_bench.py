@@ -96,14 +96,14 @@ MAIN_CONFIGS = [
     {"model": m, "width": 416}
     for m in ("yolox_nano.dyn", "yolox_nano.int8", "yolox_tiny.dyn", "yolox_tiny.int8", "yolox_tiny.int8s8",
               "yolox_s.int8")
-]
+] + [{"model": "yolox_tiny.int8", "width": 640}, {"model": "yolox_tiny.dyn", "width": 640}]
 EXTRA_CONFIGS = (
     [{"model": "yolox_tiny.int8", "width": 416, "threads": t} for t in (1, 2, 4)]
     + [{"model": "yolox_tiny.dyn", "width": 416, "threads": t} for t in (1, 2)]
     + [{"model": "yolox_tiny.int8", "width": 416, "batch": b} for b in (4, 12)]
     + [{"model": "yolox_tiny.dyn", "width": 416, "batch": 4}]
-    + [{"model": "yolox_tiny.int8", "width": w} for w in (320, 512, 640)]
-    + [{"model": "yolox_tiny.dyn", "width": w} for w in (320, 640)]
+    + [{"model": "yolox_tiny.int8", "width": w} for w in (320, 512)]
+    + [{"model": "yolox_tiny.dyn", "width": w} for w in (320, 512)]
     + [{"model": "yolox_tiny.int8", "width": 416, "square": True},
        {"model": "yolox_tiny.dyn", "width": 416, "square": True}]
     + [{"model": "yolox_tiny.dyn", "width": 416, "graph_opt": g} for g in ("disable", "basic", "extended")]

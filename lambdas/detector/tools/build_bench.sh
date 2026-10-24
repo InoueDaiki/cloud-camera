@@ -9,7 +9,12 @@ ARCH="${ARCH:-arm64}"
 EXTRA="$ROOT/build/bench-extra"
 rm -rf "$EXTRA"
 mkdir -p "$EXTRA"
-(cd "$HERE" && mise exec -- uv run python tools/make_bench_frames.py models/calib "$EXTRA/bench_frames")
+# FRAMES_DIR(動画から 1 秒ごとに切り出した連番 JPEG)があればそれを、なければ darknet の画像を使う
+if [ -n "${FRAMES_DIR:-}" ]; then
+  (cd "$HERE" && mise exec -- uv run python tools/make_bench_frames.py "$FRAMES_DIR" "$EXTRA/bench_frames" --sequence)
+else
+  (cd "$HERE" && mise exec -- uv run python tools/make_bench_frames.py models/calib "$EXTRA/bench_frames")
+fi
 cp "$HERE/tools/bench.py" "$EXTRA/"
 ARCH="$ARCH" EXTRA_DIR="$EXTRA" OUT_ZIP="$ROOT/build/cc-tmp-detect-bench-$ARCH.zip" \
   MODELS="${MODELS:-yolox_nano.dyn yolox_nano.int8 yolox_tiny.dyn yolox_tiny.int8 yolox_tiny.int8s8 yolox_s.int8}" \
