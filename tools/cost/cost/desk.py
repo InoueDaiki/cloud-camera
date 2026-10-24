@@ -6,7 +6,7 @@
 - detector の実行時間: lambdas/detector/README.md の実測(B 案: S3 の clip.mp4 をデコード、yolox_tiny INT8 @640、1,024 MB)
 - DynamoDB の書き込み回数: lambdas/common/pipeline.py の UpdateItem の数(起動ごとにリース取得と解放、区間ごとに試行回数・結果・カーソル)
 - エッジの死活とシャドウ: docs/contracts.md(30 秒ごとの status と reported の更新)
-- 検出結果の行の大きさ: 構想.md「検出結果の保存」(1 日約 17 万行で 3〜5 MB → 1 行約 25 バイト)
+- 検出結果の行の大きさ: 当初の構想の見積もり(1 日約 17 万行で 3〜5 MB → 1 行約 25 バイト)
 物体検出の推論時間、視聴時間、質問数とトークン数は実測がまだないので仮定。
 """
 

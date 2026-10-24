@@ -1,4 +1,4 @@
-// 再生元の判定(構想.md「再生」節)
+// 再生元の判定(README.md「再生」)
 //
 // - ライブ: KVS の HLS(LIVE)
 // - 処理済み位置(video_processed_until)以後: KVS の HLS(ON_DEMAND)。S3 へ退避する前の直近の録画

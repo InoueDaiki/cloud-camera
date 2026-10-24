@@ -1,4 +1,4 @@
-// ブラウザの再生能力の判定。H.265(HEVC)はブラウザ、OS、端末で対応が分かれる(構想.md「調査結果」)。
+// ブラウザの再生能力の判定。H.265(HEVC)はブラウザ、OS、端末で対応が分かれる(docs/browser-hevc.md)。
 
 import Hls from 'hls.js';
 

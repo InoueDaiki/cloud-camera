@@ -1,7 +1,7 @@
 # カメラ台数を増やしたときの検証
 
 100 台・1,000 台・1 万台にしたとき、どの上限にどの台数で当たるかを、公式ドキュメントの上限と 10 台の実測から見積もった
-(2026-10-24、ap-northeast-1、project `cc-tmp-scale`)。設計の背景は [構想.md](../構想.md)、契約は [contracts.md](contracts.md)。
+(2026-10-24、ap-northeast-1、project `cc-tmp-scale`)。全体像は [README.md](../README.md#アーキテクチャ)、契約は [contracts.md](contracts.md)。
 
 ## 結論
 
@@ -220,12 +220,12 @@ Scheduler では一斉起動を作れなかったので、スケジュールを�
 
 FlexibleTimeWindow は、Scheduler がすでに起動を散らしている(実測)ので入れなかった。
 
-### 構想.md の想定との差
+### 当初の構想の想定との差
 
-構想.md の「調査結果」の「Lambda の上限」の行は、「全台が毎分の境界で同時に起動すると上限に当たり得るので、FlexibleTimeWindow で散らす」としている。実測では次のようになった。
+当初の構想(削除済みの `構想.md`、コミット `20a15d5`)の「調査結果」の「Lambda の上限」の行は、「全台が毎分の境界で同時に起動すると上限に当たり得るので、FlexibleTimeWindow で散らす」としている。実測では次のようになった。
 
 - FlexibleTimeWindow なしでも、Scheduler はスケジュールごとに起動の秒をずらしていた(`cron` でも 0 秒にそろわない)。一斉起動は起きなかった
-- 同時実行の上限は、構想.md に書いた既定の 1,000 ではなく、このアカウントでは **10** だった(`aws lambda get-account-settings`)。数十台の検証の前に引き上げが要る
+- 同時実行の上限は、構想に書いた既定の 1,000 ではなく、このアカウントでは **10** だった(`aws lambda get-account-settings`)。数十台の検証の前に引き上げが要る
 
 ## エッジ 1 台あたりのカメラ数の目安
 

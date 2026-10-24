@@ -18,7 +18,7 @@ from .prices import PriceBook
 
 DAYS_PER_MONTH = 30
 
-# 構想.md「コスト検証の進め方」の表の項目(表示順)
+# コストの項目(表示順)。当初の構想の「コスト検証の進め方」の表に合わせた
 CATEGORIES: list[str] = [
     "取り込み",
     "一時保持",

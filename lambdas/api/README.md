@@ -1,7 +1,7 @@
 # lambdas/api: ビューワー向け HTTP API と自然言語検索
 
 API Gateway HTTP API(ペイロード 2.0)の後ろに置く 1 本の Lambda。パスでルーティングする。
-API の形は [docs/contracts.md](../../docs/contracts.md) の「HTTP API」、背景は [構想.md](../../構想.md) の「再生」「自然言語検索」。
+API の形は [docs/contracts.md](../../docs/contracts.md) の「HTTP API」、全体像は [README.md](../../README.md) の「再生」「自然言語検索」。
 
 | ファイル | 中身 |
 | --- | --- |

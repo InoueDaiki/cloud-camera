@@ -11,7 +11,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any
 
-# Cost Explorer の SERVICE 名 → 構想の項目に寄せるための目安(表示用)
+# Cost Explorer の SERVICE 名 → コストの項目(model.py の CATEGORIES)に寄せるための目安(表示用)
 SERVICE_HINT = {
     "Amazon Kinesis Video Streams": "取り込み / 一時保持 / 動画抽出 / 物体検出 / 再生",
     "AWS Lambda": "動画抽出 / 物体検出 / 再生 / 検索",

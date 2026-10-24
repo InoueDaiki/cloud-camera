@@ -11,7 +11,7 @@ from .config import Config
 from .http import ApiError, bad_request, not_found
 from .timeutil import from_ms, iso, now, parse_ts, to_ms
 
-# 断片どうしの隙間がこれ以下ならつなげる(構想.md の segments と同じ考え方)
+# 断片どうしの隙間がこれ以下ならつなげる(DynamoDB の区間の件の segments と同じ考え方。docs/contracts.md)
 MERGE_GAP_MS = 500
 HLS_EXPIRES_SECONDS = 3600
 ON_DEMAND_MAX = timedelta(hours=24)  # KVS の ON_DEMAND の上限

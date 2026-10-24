@@ -14,13 +14,13 @@ def line(lines, label):
 def test_ingest_1mbps():
     lines = desk.build_lines(desk.DeskParams(bitrate_mbps=1.0))
     ingest = line(lines, "KVS 取り込み")
-    # 1 Mbps × 30 日 = 324 × 10^9 バイト(構想.md の「約 324 GB」)= 301.7 GiB
+    # 1 Mbps × 30 日 = 324 × 10^9 バイト(当初の構想の「約 324 GB」)= 301.7 GiB
     assert ingest.qty * GB == pytest.approx(324e9)
     assert ingest.qty == pytest.approx(301.74, abs=0.01)
 
 
 def test_us_east_example_reproduced():
-    """構想.md の試算例: 1 Mbps、US East の $0.0085/GB で約 $2.75(10^9 バイト = 1 GB として)。"""
+    """当初の構想の試算例: 1 Mbps、US East の $0.0085/GB で約 $2.75(10^9 バイト = 1 GB として)。"""
     lines = desk.build_lines(desk.DeskParams(bitrate_mbps=1.0))
     gb_decimal = line(lines, "KVS 取り込み").qty * GB / 1e9
     assert gb_decimal * 0.0085 == pytest.approx(2.75, abs=0.01)

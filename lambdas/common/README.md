@@ -2,7 +2,7 @@
 
 動画の退避(`video_archiver`)と物体検出(`detector`)で共用する処理。
 処理済み位置(カーソル)、リース、1 分区間のループ、ウォーターマーク(断片が出そろったかの判定)、KVS の読み出しヘルパー、構造化ログ。
-設計は [構想.md](../../構想.md) の「処理状態の管理」、テーブルの形は [docs/contracts.md](../../docs/contracts.md)。
+全体像は [README.md](../../README.md) の「1 分ごとの処理」、テーブルの形は [docs/contracts.md](../../docs/contracts.md)。
 
 ## 同梱のしかた
 
