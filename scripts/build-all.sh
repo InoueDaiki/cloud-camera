@@ -9,6 +9,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# mise exec を付けずに呼ばれても、mise.toml のツール(uv、node など)を使えるようにする
+if command -v mise >/dev/null 2>&1; then
+  eval "$(mise env -s bash)"
+fi
 mkdir -p build
 
 built=()
