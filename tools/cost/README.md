@@ -139,14 +139,14 @@ KVS の ListStreams、IoT の ListThings、API Gateway の GetApis、CloudFront 
 ## Cost Explorer の突き合わせ
 
 `--billing` は期間(UTC の日単位)のサービス別・使用タイプ別の実請求額を出し、計算した額(実測台数 × 期間)と比べる。
-タグ `Project`(infra の `default_tags`)で絞れればその値を、絞れなければアカウント全体の値を使う(他の環境の費用が混ざる)。
+タグ `Project`(infra の `default_tags`)で絞れればその値を、絞れなければアカウント全体の値を使う。このアカウントはプロジェクト専用なので、アカウント全体の値で突き合わせてよい(タグは有効化しない方針。docs/decisions.md)。ただし `cc-tmp-*` の一時環境を同時に動かしている期間は、その費用も混ざる。
 
 2026-10-24 時点、このアカウントはリンクアカウントで、`ce list-cost-allocation-tags` が拒否され、`Project` タグでの絞り込みも 0 件。
 タグで比べるには下の「infra への要望」の 1 が要る。
 
 ## infra への要望(担当外なので報告だけ)
 
-1. **コスト配分タグ `Project` の有効化**: 支払いアカウント(管理アカウント)の Billing で `Project` をユーザー定義のコスト配分タグとして有効にする。リンクアカウントからはできない。有効化の後に発生した費用からしか効かない
+1. **(不要と決定)コスト配分タグ `Project` の有効化**: 支払いアカウント(管理アカウント)の Billing で `Project` をユーザー定義のコスト配分タグとして有効にする。リンクアカウントからはできない。有効化の後に発生した費用からしか効かない
 2. **タグが付かない費用**: IoT Core(Thing はタグ非対応、メッセージと接続の費用はリソースに紐付かない)、EventBridge Scheduler のスケジュール
    (`aws_scheduler_schedule` はタグ非対応。スケジュールグループには付けられる)、Bedrock のオンデマンド呼び出し。Bedrock は
    **アプリケーション推論プロファイル**(`aws_bedrock_inference_profile`、`jp.` のプロファイルをコピー元にしてタグを付ける)を作って api から使えば、タグで分けられる
