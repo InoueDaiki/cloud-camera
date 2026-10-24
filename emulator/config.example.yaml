@@ -1,0 +1,31 @@
+# ONVIF エミュレーターの設定例。EMULATOR_CONFIG=/path/to/config.yaml で読み込む。
+# 環境変数(EMULATOR_*)は YAML より優先される。全項目は README を参照。
+
+onvif_port: 8080        # 1 台目の ONVIF ポート。n 台目は onvif_port + n - 1
+rtsp_port: 8554
+discovery_enabled: true
+# advertise_host: 192.168.1.50   # XAddrs や RTSP URI に入れるホスト(未指定なら自動)
+rtsp_auth: false        # true で RTSP の読み出しにカメラの認証情報が必要
+
+# 全カメラ共通の既定値
+defaults:
+  username: admin
+  password: admin
+  source: testsrc       # testsrc / testsrc2 / smptebars / ... / file:/media/xxx.mp4
+  width: 1280           # main(H.265)の解像度。実行中は変えられない
+  height: 720
+  fps: 15
+  bitrate_kbps: 1024    # VBR の上限
+  keyframe_interval_s: 1
+  quality: 60           # 0〜100(CRF 40〜20 に変換)
+  sub_width: 640        # sub(H.264)の解像度
+  sub_height: 360
+  sub_bitrate_kbps: 384
+  preset: ultrafast
+
+# カメラごとの上書き(足りない分は defaults で埋めて count 台にする)
+count: 2
+cameras:
+  - name: cam-001
+  - name: cam-002
+    source: file:/media/crosswalk_toronto.mp4

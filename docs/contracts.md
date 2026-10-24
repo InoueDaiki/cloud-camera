@@ -203,8 +203,14 @@ timeline のレスポンス:
 - コンテナ 1 つで複数台を模擬できる(環境変数か設定ファイルでカメラ数を指定)
 - ONVIF: WS-Discovery(UDP 3702)、Device、Media(Profile S)、Media2(H.265 は Media2 で返す)。認証は WS-Security UsernameToken(Digest)
 - 既定のデバイスサービス URL: `http://<host>:8080/onvif/device_service`、既定の認証情報 `admin` / `admin`
-- RTSP: `rtsp://<host>:8554/cam{n}/main`(H.265)、`.../sub`(H.264、低解像度)。キーフレーム間隔 1 秒(設定可)、VBR
-- 映像ソース: 時刻を焼き込んだテストパターン(既定)か、ループ再生する動画ファイル
+  - カメラ n 台目は **ポートで分ける**: `http://<host>:{8080 + n - 1}/onvif/device_service`(cam1 = 8080、cam2 = 8081 …)。既定 2 台、カメラ名(ONVIF の name スコープと Hostname)は `cam-001` 形式
+  - 認証なしで呼べるのは GetSystemDateAndTime、GetCapabilities、GetServices、GetServiceCapabilities、GetHostname、GetWsdlUrl、GetEndpointReference。誤った認証は SOAP Fault `env:Sender` / `ter:NotAuthorized`(HTTP 400)。PasswordText も受け付ける
+- Media2: `GetProfiles` は **`Type=["All"]`(または `VideoEncoder`)を指定したときだけ** Configurations を返す(ONVIF の仕様どおり)。H.265 は `Configurations.VideoEncoder.Encoding == "H265"` のプロファイル(token `Profile_Main`)、H.264 は `Profile_Sub`。`SetVideoEncoderConfiguration` でビットレート、GovLength、フレームレート、Quality を変えられ、配信が数秒途切れて再起動する(解像度とコーデックは固定)
+- Media(ver10): Encoding に H265 がないため、`Profile_Main` は VideoEncoderConfiguration を持たない(GetStreamUri は使える)
+- RTSP: `rtsp://<host>:8554/cam{n}/main`(H.265)、`.../sub`(H.264、低解像度)。キーフレーム間隔 1 秒(設定可)、VBR。RTSP の認証は既定でなし(`EMULATOR_RTSP_AUTH=true` でカメラの認証情報が必要)
+- スナップショット: `http://<host>:{ONVIF ポート}/onvif/snapshot.jpg`(1 秒ごとに更新、認証なし)
+- 映像ソース: 時刻を焼き込んだテストパターン(既定)か、ループ再生する動画ファイル。焼き込む時刻はフレーム生成時の UTC(ミリ秒)
+- Docker のブリッジネットワークでは、同じネットワークのコンテナからだけ WS-Discovery のマルチキャストが届く(Docker for Mac のホストからは届かない)
 
 ## エッジ
 

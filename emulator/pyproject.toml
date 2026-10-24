@@ -1,0 +1,41 @@
+[project]
+name = "onvif-emulator"
+version = "0.1.0"
+description = "1 つのコンテナで複数台の ONVIF カメラを模擬するエミュレーター"
+requires-python = ">=3.13"
+dependencies = [
+    "aiohttp>=3.12",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+onvif-emulator = "onvif_emulator.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "onvif-zeep>=0.2.12",
+    "zeep>=4.3",
+    "wsdiscovery>=2.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/onvif_emulator"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I"]
+ignore = ["E501"]  # XML テンプレートは長い行を許す
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+markers = [
+    "media: RTSP 配信(MediaMTX + FFmpeg)が動いていることを前提にするテスト",
+]

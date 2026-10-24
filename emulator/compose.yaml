@@ -1,0 +1,53 @@
+# ONVIF カメラエミュレーター単体の compose。
+#   docker compose -f emulator/compose.yaml up --build
+#   docker compose -f emulator/compose.yaml --profile test run --rm tests   # 結合テスト
+# リポジトリ直下の compose.yaml からは `include: [emulator/compose.yaml]` で取り込む。
+
+services:
+  emulator:
+    build:
+      context: .
+      target: base
+    image: cloud-camera/onvif-emulator:latest
+    init: false # tini を ENTRYPOINT で使う
+    # 空の環境変数は無視される(既定値はコード側。YAML を使うときは EMULATOR_CONFIG を指定)
+    environment:
+      EMULATOR_CAMERAS: ${EMULATOR_CAMERAS:-}
+      EMULATOR_USERNAME: ${EMULATOR_USERNAME:-}
+      EMULATOR_PASSWORD: ${EMULATOR_PASSWORD:-}
+      EMULATOR_WIDTH: ${EMULATOR_WIDTH:-}
+      EMULATOR_HEIGHT: ${EMULATOR_HEIGHT:-}
+      EMULATOR_FPS: ${EMULATOR_FPS:-}
+      EMULATOR_BITRATE_KBPS: ${EMULATOR_BITRATE_KBPS:-}
+      EMULATOR_KEYFRAME_INTERVAL_S: ${EMULATOR_KEYFRAME_INTERVAL_S:-}
+      EMULATOR_SOURCE: ${EMULATOR_SOURCE:-}
+      EMULATOR_CAM2_SOURCE: ${EMULATOR_CAM2_SOURCE:-}
+      EMULATOR_ADVERTISE_HOST: ${EMULATOR_ADVERTISE_HOST:-}
+      EMULATOR_RTSP_AUTH: ${EMULATOR_RTSP_AUTH:-}
+      EMULATOR_CONFIG: ${EMULATOR_CONFIG:-}
+    volumes:
+      - ./media:/media:ro
+    ports:
+      - "${EMULATOR_ONVIF_PORTS:-8080-8083}:${EMULATOR_ONVIF_PORTS:-8080-8083}"
+      - "${EMULATOR_RTSP_HOST_PORT:-8554}:8554"
+      - "${EMULATOR_RTP_HOST_PORT:-8000}:8000/udp"
+      - "${EMULATOR_RTCP_HOST_PORT:-8001}:8001/udp"
+      - "${EMULATOR_DISCOVERY_HOST_PORT:-3702}:3702/udp"
+    restart: unless-stopped
+
+  # 結合テスト(同じ Docker ネットワークから WS-Discovery のマルチキャストで探す)
+  tests:
+    profiles: ["test"]
+    build:
+      context: .
+      target: test
+    depends_on:
+      emulator:
+        condition: service_healthy
+    environment:
+      EMULATOR_HOST: emulator
+      EMULATOR_CAMERAS: ${EMULATOR_CAMERAS:-2}
+      EMULATOR_USERNAME: ${EMULATOR_USERNAME:-admin}
+      EMULATOR_PASSWORD: ${EMULATOR_PASSWORD:-admin}
+      EMULATOR_DISCOVERY: multicast
+      EMULATOR_LOOP_CAMERA: ${EMULATOR_LOOP_CAMERA:-}
