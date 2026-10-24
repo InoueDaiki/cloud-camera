@@ -11,7 +11,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
-from . import onvif
+from . import onvif, ptz
 from .config import Config
 from .pipeline import Backoff, PipelineSpec, PipelineSupervisor
 
@@ -164,6 +164,7 @@ class Agent:
         self._last_reported: dict | None = None
         self._stop = asyncio.Event()
         self._shadow_version = -1
+        self.ptz = ptz.PtzManager(cfg.gateway_id, self._publish_ptz_result, self._publish_ptz_shadow)
 
     # --- シャドウ -------------------------------------------------------
     @property
@@ -220,6 +221,7 @@ class Agent:
                 if cam in plan["start"] or cam in plan["restart"]:
                     w.start()
             self.confs = desired
+            self.ptz.sync(desired)
         self.report_soon()
 
     # --- reported / status ---------------------------------------------
@@ -334,11 +336,23 @@ class Agent:
         elif action == "status":
             if self.iot:
                 await self.iot.publish(self.iot.t_status, self.status_payload())
+        elif action == "ptz":
+            await self.ptz.handle(msg, self.confs)
         elif action == "reload":
             if self.cfg.use_shadow and self.iot:
                 await self.request_shadow()
         else:
             log.warning("知らない cmd: %s", action)
+
+    # --- PTZ(処理は ptz.py) ---------------------------------------------
+    async def _publish_ptz_result(self, payload: dict) -> None:
+        if self.iot:
+            await self.iot.publish(f"{self.cfg.topic_prefix}/ptz", payload)
+
+    async def _publish_ptz_shadow(self, camera_id: str, state: dict) -> None:
+        if self.iot and self.cfg.use_shadow and self.iot.connected.is_set():
+            await self.iot.publish(f"{self.shadow_prefix}/update",
+                                   {"state": {"reported": {"cameras": {camera_id: {"ptz": state}}}}})
 
     # --- 実行 -----------------------------------------------------------
     async def _on_connected(self) -> None:
@@ -346,6 +360,7 @@ class Agent:
         if self.cfg.use_shadow:
             await self.publish_presence(True)
             await self.request_shadow()
+            self.ptz.resend()
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
@@ -379,6 +394,7 @@ class Agent:
         log.info("停止中…")
         for t in tasks:
             t.cancel()
+        await self.ptz.stop_all()
         await asyncio.gather(*(w.stop() for w in self.workers.values()), return_exceptions=True)
         self._last_reported = None
         if self.iot:

@@ -301,4 +301,14 @@ data "aws_iam_policy_document" "lambda" {
       resources = local.iot_thing_arns
     }
   }
+
+  # PTZ のコマンド(api だけ)。各ゲートウェイの cmd トピックにだけ publish できる
+  dynamic "statement" {
+    for_each = each.key == "api" ? [1] : []
+    content {
+      sid       = "IotPublishCmd"
+      actions   = ["iot:Publish"]
+      resources = ["arn:${local.partition}:iot:${local.region}:${local.account_id}:topic/${local.p}/*/cmd"]
+    }
+  }
 }

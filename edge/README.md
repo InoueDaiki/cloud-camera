@@ -17,6 +17,7 @@ Raspberry Pi 4(linux/arm64)向けで、Mac(Apple Silicon の Docker)でもその
 | `agent/cc_edge/agent.py` | 本体。シャドウ(またはローカル設定)の差分適用、reported、status(30 秒)、cmd、discovery |
 | `agent/cc_edge/iot.py` | AWS IoT Device SDK v2(MQTT5)。LWT、再接続ごとの再購読 |
 | `agent/cc_edge/onvif.py` | 標準ライブラリだけの ONVIF クライアント。WS-Discovery、WS-Security Digest、Media2 で H.265 を自動選択、GetStreamUri |
+| `agent/cc_edge/ptz.py` | PTZ。ONVIF PTZ クライアント(GetServices で XAddr、プロファイルの PTZConfiguration、各操作)、cmd `ptz` の処理、`{p}/{gw}/ptz` への結果、シャドウの `reported.cameras.{id}.ptz` |
 | `agent/cc_edge/pipeline.py` | パイプラインの仕様と、子プロセスの監視・バックオフ付き再起動 |
 | `agent/cc_edge/runner.py` | 1 カメラ = 1 子プロセス。GStreamer を GI で組み、送信バイト数、GOP、KVS の ACK(永続化までの遅れ)を計測して JSON 行で親に渡す |
 | `scripts/tmp-aws.sh` | Terraform を使わずに実 AWS で試すための一時リソース(`cc-tmp-edge-*`)の作成・削除 |
@@ -70,6 +71,31 @@ mise exec -- edge/scripts/tmp-aws.sh down    # 全部消して、残りがない
 cd edge && mise exec -- uv venv .venv && mise exec -- uv pip install --python .venv/bin/python awsiotsdk==1.31.0 pytest
 .venv/bin/python -m pytest
 ```
+
+## PTZ
+
+契約は [docs/contracts.md](../docs/contracts.md) の「PTZ」。ビューワー → API → IoT Core の `{p}/{gw}/cmd` → エッジ → ONVIF PTZ → カメラ。
+
+- 起動時(とシャドウの desired でカメラの設定が変わったとき)に、カメラごとに GetServices で PTZ サービスを探し
+  (なければ GetCapabilities)、Media2(なければ Media)の GetProfiles で PTZConfiguration の付いたプロファイルを選ぶ
+  (`profile_token` の指定があればそれ、なければ H.265 のプロファイル)。GetPresets と GetStatus を取り、
+  シャドウの `reported.cameras.{id}.ptz` に `{"supported", "pan", "tilt", "zoom", "presets", "move_status", "error", "updated_at"}` を書く
+- PTZ サービスがない、PTZConfiguration がない、`rtsp_url` を直接使う設定(ONVIF なし)のカメラは `supported: false`。
+  つながらないときも `supported: false` と `error` を書き、次の cmd で準備し直す。非対応のカメラへの cmd は `ok: false` の結果を返す
+- cmd はカメラごとに届いた順に 1 つずつ処理する(押している間の continuous と、離したときの stop が逆転しない)。
+  値はもう一度範囲に収める。continuous の `timeout_ms`(既定 10 秒)は ONVIF の Timeout に渡す(stop を取りこぼしても止まる)
+- 結果は `{p}/{gw}/ptz` に `{"ts", "gateway_id", "camera_id", "request_id", "ok", "error"?, "position", "move_status"}`
+  (set_preset は `preset_token` も)。そのあと GetStatus を 0.5 秒ごとに見て、動いている間は 1 秒に 1 回まで、止まったら必ず 1 回シャドウに書く
+
+MQTT なしで、エミュレーターに cmd を直接流して確かめる:
+
+```sh
+docker compose up -d --build
+docker compose exec edge python3 -m cc_edge.ptz http://emulator:8080/onvif/device_service \
+  '{"op":"continuous","pan":0.5,"timeout_ms":3000}' '{"sleep":2}' '{"op":"stop"}' '{"op":"home"}'
+```
+
+`result` と `shadow[...]` の行に、エッジが送るはずの内容がそのまま出る。
 
 ## Raspberry Pi 4 への配置
 

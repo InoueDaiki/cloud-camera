@@ -10,6 +10,7 @@ API の形は [docs/contracts.md](../../docs/contracts.md) の「HTTP API」、�
 | `app/timeline.py` | `GET /api/cameras/{id}/timeline`(処理済み位置の前は DynamoDB、後は KVS ListFragments) |
 | `app/playlist.py` | `GET /api/cameras/{id}/vod.m3u8`(区間の `hls` から複数区間の HLS を組む) |
 | `app/kvs.py` | `GET /api/cameras/{id}/kvs-hls`、ListFragments |
+| `app/ptz.py` | `POST /api/cameras/{id}/ptz`(IoT Core の cmd トピックへ publish)、`GET /api/cameras/{id}/ptz`(シャドウ) |
 | `app/search.py` / `prompt.py` / `sql_guard.py` / `athena.py` | `POST /api/search`(Bedrock Converse のツール使用 → SQL ガード → Athena) |
 | `local_server.py` | ローカル開発用サーバー |
 | `scripts/e2e_search.py` | 検索の end-to-end 検証(一時リソースを作って消す) |
@@ -42,7 +43,7 @@ mise exec -- ./build.sh                # ../../build/api.zip を作る(sqlglot �
 
 Lambda のタイムアウトは 30 秒、メモリは 256 MB で足りる(検索 1 回で 3〜6 秒、実測)。
 
-**IAM(Terraform 担当向け)**: `dynamodb:Query`/`BatchGetItem`(state テーブル)、`iot:GetThingShadow`/`UpdateThingShadow`、
+**IAM(Terraform 担当向け)**: `dynamodb:Query`/`BatchGetItem`(state テーブル)、`iot:GetThingShadow`/`UpdateThingShadow`、`iot:Publish`(`{p}/*/cmd` トピックだけ。PTZ)、
 `kinesisvideo:GetDataEndpoint`/`ListFragments`/`GetHLSStreamingSessionURL`、
 `athena:StartQueryExecution`/`GetQueryExecution`/`GetQueryResults`/`StopQueryExecution`(ワークグループ)、
 `glue:GetDatabase`/`GetTable`/`GetPartitions`、検出結果バケットの `s3:GetObject`/`ListBucket`、
@@ -84,6 +85,12 @@ mise exec -- uv run python local_server.py --port 8787
   (`segments` の最初の開始、なければ区間の開始)。`EXT-X-VERSION:7`、`TARGETDURATION` は断片の最大長の切り上げ
 - **kvs-hls**: `FRAGMENTED_MP4`、`PRODUCER_TIMESTAMP`、`DisplayFragmentTimestamp=ALWAYS`(PDT 付き)、有効期限 1 時間。
   呼ぶたびに新しいセッション URL を発行する(共有するとスロットリングされ得るため)。ON_DEMAND は最大 24 時間
+
+- **ptz**(POST): 本文は MQTT の cmd の `op` 以降と同じ形(docs/contracts.md の「PTZ」)。値の範囲を検証し(範囲外は 400。
+  continuous の速度と absolute / relative の pan・tilt は -1〜1(relative の pan・tilt は -2〜2)、absolute の zoom は 0〜1、
+  `timeout_ms` は 100〜60000、既定 10000)、知らない項目は捨てる。`request_id`(UUID)を付けて `{p}/{gw}/cmd` に QoS 1 で
+  publish し、エッジの処理を待たずに `202 {"request_id"}` を返す。処理の結果はエッジが `{p}/{gw}/ptz` とシャドウに書く
+- **ptz**(GET): シャドウの `reported.cameras.{id}.ptz` をそのまま返す。なければ `{"supported": false}`
 
 ## 自然言語検索
 
