@@ -33,9 +33,9 @@ class PipelineSpec:
     thing_name: str = ""
     retention_hours: int = 1
     # 回線断の間 kvssink(producer SDK)のメモリに溜める上限。どちらかに達したら古い方から捨てる。
-    # 既定は約 10 分(1.5Mbps で約 110MB)。意味と値の理由は edge/README.md の「回線断とバッファ」
-    storage_size_mb: int = 128
-    buffer_duration_s: int = 600
+    # 既定は 10 分 + 再接続の余裕 1 分(1.5Mbps で約 124MB)。意味と値の理由は edge/README.md の「回線断とバッファ」
+    storage_size_mb: int = 160
+    buffer_duration_s: int = 660
     connection_staleness_s: int = 30
     replay_duration_s: int = 0  # 0 ならバッファと同じ長さ(replay_s())
     log_config: str = "/opt/kvs/kvs_log_configuration"
@@ -170,6 +170,7 @@ class PipelineSupervisor:
         self.kvs_errors = 0  # KVS への送信エラーの累計(回線断など。再起動はしない)
         self.buffer_overflows = 0  # バッファあふれで捨てたフレームの累計(再起動をまたいで加算)
         self._dropped_run = 0
+        self.lost_s_prev = 0.0  # 前の子プロセスまでの lost_s の累計
         self.caps: dict = {}
         self.spec: PipelineSpec | None = None
 
@@ -215,6 +216,7 @@ class PipelineSupervisor:
                 "limit_s", "limit_bytes", "persisted_lag_s", "sessions", "stale_events", "error_acks")
         out = {k: b.get(k) for k in keys}
         out["dropped_frames"] = self.dropped_frames
+        out["lost_s"] = round(self.lost_s_prev + float(b.get("lost_s") or 0), 1)
         out["kvs_errors"] = self.kvs_errors
         return out
 
@@ -239,6 +241,8 @@ class PipelineSupervisor:
             self._bytes_run = 0
             self.buffer_overflows += self._dropped_run
             self._dropped_run = 0
+            self.lost_s_prev += float((self.last_stats.get("buffer") or {}).get("lost_s") or 0)
+            self.last_stats = {}
             self.running = False
             self.started_at = None
             if self._stop.is_set():
@@ -308,10 +312,20 @@ class PipelineSupervisor:
             log.warning("[%s] KVS への送信エラー %s(kvssink の再接続に任せる)", self.camera_id, ev.get("code"))
         elif t == "buffer_overflow":
             self._dropped_run = int(ev.get("dropped_frames") or 0)
-            log.warning("[%s] バッファがあふれ、未送信の古いフレームを %s 枚捨てた(累計 %s 枚、未送信 %s 秒、使用 %s バイト)",
-                        self.camera_id, ev.get("new"), self.dropped_frames, ev.get("unsent_s"),
-                        ev.get("store_used_bytes"))
+            if ev.get("lost_s") is not None:
+                log.warning("[%s] 回線断がバッファの上限を超え、古い映像から捨てている(今回 %s 秒、累計 %s 秒、"
+                            "使用 %s バイト)", self.camera_id, ev.get("lost_s"), ev.get("lost_s_total"),
+                            ev.get("store_used_bytes"))
+            else:
+                log.warning("[%s] バッファがあふれ、未送信の古いフレームを %s 枚捨てた(累計 %s 枚、未送信 %s 秒、使用 %s バイト)",
+                            self.camera_id, ev.get("new"), self.dropped_frames, ev.get("unsent_s"),
+                            ev.get("store_used_bytes"))
         elif t == "ack":
-            log.debug("[%s] ack %s", self.camera_id, ev)
+            if ev.get("ack") == "ERROR":
+                # KVS が断片を受け付けなかった(その断片は欠ける)。result は KVS のエラー ACK のコード
+                log.warning("[%s] KVS がエラー ACK を返した: fragment_ts_ms=%s result=%s",
+                            self.camera_id, ev.get("fragment_ts_ms"), ev.get("result"))
+            else:
+                log.debug("[%s] ack %s", self.camera_id, ev)
         else:
             log.info("[%s] %s", self.camera_id, ev)

@@ -47,7 +47,7 @@ class IotConnection:
             will_delay_interval_sec=0,
             keep_alive_interval_sec=60,
             min_reconnect_delay_ms=1000,
-            max_reconnect_delay_ms=60000,
+            max_reconnect_delay_ms=30000,  # 回線断から戻ったら 30 秒以内に status と reported を戻す
             on_publish_received=self._on_publish,
             on_lifecycle_connection_success=self._on_success,
             on_lifecycle_connection_failure=self._on_failure,
@@ -114,7 +114,9 @@ class IotConnection:
             topic=topic, payload=json.dumps(payload, separators=(",", ":")),
             qos=mqtt5.QoS(qos)))
         try:
-            await asyncio.wait_for(asyncio.wrap_future(fut), 10)
+            # shield: タイムアウトで CRT 側の Future まで取り消すと、後で CRT が結果を入れようとして
+            # InvalidStateError がログに出る(回線断のときに起きる)
+            await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(fut)), 10)
         except Exception as e:  # noqa: BLE001
             log.warning("publish %s に失敗: %s", topic, e)
 

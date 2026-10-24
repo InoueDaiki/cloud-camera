@@ -148,6 +148,8 @@ class Runner:
         self.kvs_metrics: dict | None = None
         self.metrics_error: str | None = None
         self.dropped_frames_reported = 0
+        self.lost_s_current = 0.0  # 今の回線断で、バッファの上限を超えて失った秒数
+        self.lost_s_total = 0.0
         self.last_persisted_ts_ms: int | None = None  # 最後に永続化された断片のプロデューサー時刻
         self.pipeline = self._build()
 
@@ -373,6 +375,20 @@ class Runner:
                   "new": dropped - self.dropped_frames_reported,
                   "unsent_s": out.get("unsent_s"), "store_used_bytes": out.get("store_used_bytes")})
             self.dropped_frames_reported = dropped
+        # 欠落の見積もり: 最後に永続化された時刻からバッファの最古までの間は、もうどこにもない。
+        # (未送信のまま捨てたものは dropped_frames に数えられるが、届かない接続に「送った」ことになっていた
+        #  フレームが上限で消えたときは数えられないので、時刻の差で見る。平常時の差 1〜2 秒は許容)
+        lag, buf = out.get("persisted_lag_s"), out.get("buffered_s")
+        lost = 0.0
+        if lag is not None and buf is not None and lag - buf > 3:
+            lost = round(lag - buf, 1)
+        if lost > self.lost_s_current:
+            self.lost_s_total = round(self.lost_s_total + lost - self.lost_s_current, 1)
+            emit({"type": "buffer_overflow", "lost_s": lost, "lost_s_total": self.lost_s_total,
+                  "dropped_frames": dropped, "new": 0, "unsent_s": out.get("unsent_s"),
+                  "store_used_bytes": out.get("store_used_bytes")})
+        self.lost_s_current = lost if lost > 0 else 0.0
+        out["lost_s"] = self.lost_s_total
         if self.kvs_error_codes:
             out["kvs_errors"] = dict(self.kvs_error_codes)
         return out

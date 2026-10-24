@@ -71,7 +71,7 @@ def test_backoff():
 
 def test_buffer_settings_defaults_and_env():
     cfg = config.load({"CC_CONFIG_FILE": "/nonexistent"})
-    assert (cfg.kvs_buffer_s, cfg.kvs_storage_size_mb) == (600, 128)  # 約 10 分(1.5Mbps で約 110MB)
+    assert (cfg.kvs_buffer_s, cfg.kvs_storage_size_mb) == (660, 160)  # 10 分 + 余裕 1 分(1.5Mbps で約 124MB)
     cfg = config.load({"CC_CONFIG_FILE": "/nonexistent", "CC_KVS_BUFFER_S": "300", "CC_KVS_STORAGE_SIZE_MB": "64",
                        "CC_KVS_REPLAY_S": "90", "CC_KVS_CONNECTION_STALENESS_S": "20", "CC_KVS_FRAMERATE": "60"})
     assert (cfg.kvs_buffer_s, cfg.kvs_storage_size_mb, cfg.kvs_replay_s) == (300, 64, 90)
@@ -86,9 +86,9 @@ def test_spec_buffer_properties():
     # max-latency はバッファより長くして使わない(追いつき中の張り直しを避ける)
     assert s.max_latency_s() > s.buffer_duration_s
     d = s.describe()
-    assert "buffer-duration=600" in d and "storage-size=128" in d and "replay-duration=600" in d
+    assert "buffer-duration=660" in d and "storage-size=160" in d and "replay-duration=660" in d
     # 巻き戻しの既定はバッファと同じ長さ(短いと回線断の始めのぶんが送り直されない)
-    assert s.replay_s() == 600 and PipelineSpec(camera_id="c", rtsp_url="r", replay_duration_s=90).replay_s() == 90
+    assert s.replay_s() == 660 and PipelineSpec(camera_id="c", rtsp_url="r", replay_duration_s=90).replay_s() == 90
 
 
 def _sup():
@@ -121,6 +121,9 @@ def test_supervisor_buffer_overflow_counts_and_final_stats_kept():
     # 子プロセスの最後の stats(final)で計測値が消えない
     sup._handle({"type": "stats", "final": True, "bytes": 2})
     assert sup.buffer_status()["unsent_s"] == 600.0 and sup.bytes_sent == 2
+    # 上限を超えて失った秒数(lost_s)は子プロセスの再起動をまたいで足す
+    sup._handle({"type": "stats", "bytes": 3, "last_buffer_age_s": 0.1, "buffer": {"lost_s": 30.0}})
+    assert sup.buffer_status()["lost_s"] == 30.0
     # fake / file のときは buffer なし
     sup2, _ = _sup()
     sup2._handle({"type": "stats", "bytes": 1, "last_buffer_age_s": 0.1, "buffer": None})

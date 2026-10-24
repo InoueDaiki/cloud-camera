@@ -53,9 +53,10 @@ class Config:
     backoff_initial_s: float = 2.0
     backoff_max_s: float = 60.0
     kvs_retention_hours: int = 1  # kvssink がストリームを自動作成する場合だけ効く
-    # 回線断の間 kvssink のメモリに溜める上限(1 カメラあたり)。既定は約 10 分(1.5Mbps で約 110MB)
-    kvs_storage_size_mb: int = 128
-    kvs_buffer_s: int = 600
+    # 回線断の間 kvssink のメモリに溜める上限(1 カメラあたり)。既定は 10 分 + 復旧後の再接続の余裕 1 分。
+    # 1.5Mbps で 660 秒は約 124MB なので、時間の上限が先に効くようメモリは 160MB
+    kvs_storage_size_mb: int = 160
+    kvs_buffer_s: int = 660
     kvs_connection_staleness_s: int = 30
     kvs_replay_s: int = 0  # 0 ならバッファと同じ長さ
     kvs_framerate: int = 0  # 0 なら 30 で見積もる(バッファの枠 = framerate × kvs_buffer_s)
