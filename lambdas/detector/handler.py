@@ -19,7 +19,7 @@ import boto3
 
 import frame_source
 import parquet_store
-from common import MinuteResult, kvs, log, max_rss_mb, run_pipeline
+from common import MinuteResult, log, max_rss_mb, run_pipeline
 from detect import Detector
 
 HERE = os.path.dirname(os.path.abspath(__file__))
