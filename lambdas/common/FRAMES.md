@@ -265,7 +265,7 @@ def clipfile(camera_id, start, end):
 ## 組み込み後の実 KVS での確認(2026-10-24)
 
 `emulator/` のサンプル動画(`crosswalk_toronto.mp4`、H.265 1280×720 15fps、キーフレーム 1 秒、約 1 Mbps)を
-`lambdas/video_archiver/testing/kvssink` の送信コンテナで一時 KVS ストリーム `cc-tmp-binteg-cam-001` に送り、
+検証用の送信コンテナ(`lambdas/video_archiver/testing/kvssink`。エッジのコンテナに置き換わったので削除。コミット 37dc0ef までの履歴にある)で一時 KVS ストリーム `cc-tmp-binteg-cam-001` に送り、
 `build.sh` で作った zip(video_archiver 展開後 34 MB、detector 展開後 190 MB)を一時 Lambda(arm64)で毎分 1 回、video_archiver → detector の順に動かした。
 一時関数の IAM には GetImages の権限を付けていない。
 

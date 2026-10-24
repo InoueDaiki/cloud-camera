@@ -147,7 +147,10 @@ EventBridge Scheduler がカメラごとに video_archiver と detector を毎�
 | [infra/](infra/README.md) | Terraform |
 | [viewer/](viewer/README.md) | ビューワー |
 | [tools/cost/](tools/cost/README.md) | 単価表、机上計算、実測の収集 |
-| [scripts/](scripts/) | ビルド、デプロイ、削除、テスト、E2E |
+| [tools/codec/](docs/codec.md) | H.264 / H.265 の画質とビットレートの測定(VMAF)、実 KVS での比較。結果は `tools/codec/results/` |
+| [tools/scale/](docs/scale.md) | 台数を増やしたときの計測(10 カメラのエッジ、遅れの記録、起動の分析)。結果は `tools/scale/results/` |
+| [tools/browser-check/](docs/browser-hevc.md) | ブラウザの H.265 対応の確認ページと、Playwright での一括確認 |
+| [scripts/](scripts/) | ビルド、デプロイ、削除、テスト、E2E(運用の手順。計測・調査の道具は `tools/`、コンポーネント固有の道具は各コンポーネントの `tools/`・`scripts/`・`bench/`) |
 | [docs/](docs/) | 決定事項、契約、調査と計測の記録(WebRTC、ブラウザ、コーデック、台数、E2E) |
 
 ## セットアップ

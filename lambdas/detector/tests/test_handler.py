@@ -60,7 +60,6 @@ def _fake_kvs(monkeypatch, start, n, gaps=()):
 
     monkeypatch.setattr(kvs, "list_fragments", list_fragments)
     monkeypatch.setattr(kvs, "get_images", get_images)
-    monkeypatch.setattr(kvs, "minute_ready", lambda *a, **k: (True, "quiet"))
     return calls
 
 
@@ -106,7 +105,6 @@ def test_frame_source_can_be_swapped(env, monkeypatch):
 
     handler, s3 = env
     start = datetime(2026, 10, 24, 10, 20, tzinfo=UTC)
-    monkeypatch.setattr(kvs, "minute_ready", lambda *a, **k: (True, "quiet"))
     img = Image.open(os.path.join(FIXTURES, "person.jpg")).convert("RGB")
     frames = [(start, img), (start + timedelta(seconds=1), np.asarray(img))]
     monkeypatch.setattr(handler, "FRAME_SOURCE",
@@ -137,7 +135,6 @@ def test_resource_not_found_falls_back_to_segments(env, monkeypatch):
         a, b = calls[-1]
         return [kvs.Image(ts_ms=base + t, content=jpeg, error=None) for t in range(a, b + 1, 1000)]
 
-    monkeypatch.setattr(kvs, "minute_ready", lambda *a, **k: (True, "quiet"))
     monkeypatch.setattr(kvs, "list_fragments", lambda *a: frags)
     monkeypatch.setattr(kvs, "get_images", get_images)
     res = handler.process_minute("cam-001", start, start + timedelta(minutes=1))

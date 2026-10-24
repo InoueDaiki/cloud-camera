@@ -252,19 +252,19 @@ zstd 圧縮。実 KVS の通しでは、人と車が多い交差点の映像で 
 | clip 版のフレーム源 | `tests/test_frame_source.py`(moto、PyAV でその場で作る H.265 の fMP4): キーフレームの時刻(秒ちょうどでない)、録画の切れ目、幅 640・縦横比、`video_status` なし → `NotReady` / 上限を過ぎたら GetImages、`EMPTY` → 空、`FAILED` と壊れた clip → GetImages、person の映る clip から Parquet まで(GetImages を呼ばない)、`upstream_kind` の受け渡し | OK |
 | process_minute | `tests/test_handler.py`: GetImages の 61 枚目(終わりの時刻)を落とす、MEDIA_ERROR を飛ばす、`NotReady`、ResourceNotFound のときに録画範囲で取り直す | OK |
 | zip | `SMOKE=1 ./build.sh`(Lambda のベースイメージで import・推論・Parquet) | arm64 / x86_64 とも OK |
-| 実 KVS で通し | エッジなしで、サンプル動画(1280×720、H.265、1 秒ごとのキーフレーム)を `tools/kvs_put_media.py`(PutMedia)で一時ストリームに送り、本番の zip を一時関数(arm64)にデプロイして `run_pipeline` ごと実行(`tools/lambda_e2e.py`) | 下記 |
+| 実 KVS で通し | エッジなしで、サンプル動画(1280×720、H.265、1 秒ごとのキーフレーム)を PutMedia で一時ストリームに送り、本番の zip を一時関数(arm64)にデプロイして `run_pipeline` ごと実行(当時の `tools/kvs_put_media.py` と `tools/lambda_e2e.py`。全体の E2E(docs/e2e.md)に置き換わったので削除。コミット 37dc0ef までの履歴にある) | 下記 |
 
 実 KVS の通しの結果(`cc-tmp-detect-h265`、H.265):
 
 - **GetImages は H.265 で動く**(416×234 の JPEG)。幅と高さは両方指定が必要(片方だけだと `InvalidArgumentException`)。1 分を 1 秒間隔で取ると終わりの時刻を含む 61 枚が 3 ページ(1 ページ 25 枚)で返り、取得は約 1.9 秒
 - 1 区間あたり 57 枚で推論、4 枚は `MEDIA_ERROR`(PutMedia のセッションの先頭と終わり、途中 2 か所。エッジからの連続送信では未確認)
 - 1 区間の処理(tiny INT8): 2,048 MB で 4.2 秒(U8S8)、1,024 MB で 7.0〜7.3 秒(推論 81 ms / 枚)、512 MB で 9.1 秒(111 ms / 枚)。最大メモリ 305〜336 MB、コールドスタート 1.0〜1.2 秒(うちモデル読み込み 0.25 秒)
-- DynamoDB の区間の件に `detect_status`(DONE / EMPTY)、`detect_count`、`frame_count`、`detect_duration_ms`、`detect_attempts` が入り、処理済み位置が進んだ。送信直後の区間は `minute_ready` で `not_ready` になり、送信が止まって 45 秒後に処理された
+- DynamoDB の区間の件に `detect_status`(DONE / EMPTY)、`detect_count`、`frame_count`、`detect_duration_ms`、`detect_attempts` が入り、処理済み位置が進んだ。送信直後の区間は当時の `minute_ready`(今はウォーターマークの判定に置き換えて削除)で `not_ready` になり、送信が止まって 45 秒後に処理された
 - Parquet は `detections/dt=2026-10-24/h265.parquet` に追記され、person / car / traffic light などが入った
 
 ### 実 KVS での確認(clip 版、2026-10-24)
 
-`emulator/` のサンプル動画(`crosswalk_toronto.mp4`、H.265 1280×720 15fps、約 1 Mbps)を `lambdas/video_archiver/testing/kvssink` の送信コンテナで
+`emulator/` のサンプル動画(`crosswalk_toronto.mp4`、H.265 1280×720 15fps、約 1 Mbps)を検証用の送信コンテナ(`lambdas/video_archiver/testing/kvssink`。エッジのコンテナに置き換わったので削除。コミット 37dc0ef までの履歴にある)で
 一時 KVS ストリームに送り、`build.sh` で作った video_archiver と detector の zip を一時 Lambda(arm64)で毎分 1 回、video_archiver → detector の順に動かした。
 一時関数の IAM には GetImages の権限を付けていない。
 
@@ -318,9 +318,7 @@ getimages のとき `image_errors`(GetImages の `MEDIA_ERROR` などの数)、`
 | `bench.py` | ベンチマークの Lambda ハンドラー(手元でも動く) |
 | `lambda_bench.py` | 一時関数 `cc-tmp-detect-bench`(arm64)/ `cc-tmp-detect-bench-x86` を作り、メモリ × 設定で計測、削除 |
 | `summarize_bench.py` | 結果を表と費用にまとめる |
-| `kvs_put_media.py` | MKV を KVS の PutMedia で送る(エッジなしで GetImages を試す) |
-| `lambda_e2e.py` | 本番の zip を一時関数にデプロイし、一時 KVS ストリーム・DynamoDB・S3 で通しを確かめる |
 | `smoke.py` / `strip_libs.sh` | build.sh から使う |
 
-一時リソースはすべて `cc-tmp-detect-` で始まる。`lambda_e2e.py cleanup` → `lambda_bench.py cleanup` で消え、
+一時リソースはすべて `cc-tmp-detect-` で始まる。`lambda_bench.py cleanup` で消え、
 最後に残りがないことを確認する(`lambda_bench.py verify`)。

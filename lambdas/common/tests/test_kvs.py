@@ -82,9 +82,9 @@ def test_endpoint_cache_ttl(monkeypatch):
     _stub_endpoint(monkeypatch, ["https://a.example.com", "https://c.example.com"])
     now = [1000.0]
     monkeypatch.setattr(kvs.time, "monotonic", lambda: now[0])
-    assert kvs.get_data_endpoint("s1", kvs.GET_CLIP) == "https://a.example.com"
+    assert kvs.get_data_endpoint("s1", kvs.GET_HLS_STREAMING_SESSION_URL) == "https://a.example.com"
     now[0] += kvs.ENDPOINT_TTL_SECONDS + 1
-    assert kvs.get_data_endpoint("s1", kvs.GET_CLIP) == "https://c.example.com"
+    assert kvs.get_data_endpoint("s1", kvs.GET_HLS_STREAMING_SESSION_URL) == "https://c.example.com"
 
 
 def _archived(monkeypatch):
@@ -197,11 +197,6 @@ def test_get_images_pages_and_decodes(monkeypatch):
     st.assert_no_pending_responses()
 
 
-def test_minute_ready_is_deprecated_and_always_ready():
-    # 互換のための残骸。判定は run_pipeline のウォーターマークが行う
-    assert kvs.minute_ready("s", T(10, 21), T(10, 21, 1), quiet_seconds=30, max_wait_seconds=600) == (True, "watermark")
-
-
 def test_endpoint_export_import(monkeypatch):
     """別の実行環境の起動が保存したエンドポイントを使い、GetDataEndpoint を呼ばない。"""
     _stub_endpoint(monkeypatch, ["https://a.example.com"])
@@ -222,7 +217,7 @@ def test_endpoint_import_ignores_expired_and_garbage(monkeypatch):
     st = _stub_endpoint(monkeypatch, ["https://fresh.example.com"])
     old = kvs.time.time() - kvs.ENDPOINT_TTL_SECONDS - 1
     kvs.import_endpoints("s1", {kvs.LIST_FRAGMENTS: ["https://old.example.com", old],
-                                kvs.GET_IMAGES: "broken", kvs.GET_CLIP: ["http://plain.example.com", kvs.time.time()]})
+                                kvs.GET_IMAGES: "broken", kvs.GET_HLS_STREAMING_SESSION_URL: ["http://plain.example.com", kvs.time.time()]})
     kvs.import_endpoints("s1", None)
     assert kvs.export_endpoints("s1") == {}
     assert kvs.get_data_endpoint("s1", kvs.LIST_FRAGMENTS) == "https://fresh.example.com"

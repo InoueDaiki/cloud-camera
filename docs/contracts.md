@@ -133,7 +133,7 @@ S3 → 区間の件 → 処理済み位置の順に書く。これで「区間�
 - 限界: `MAX_LATE_SECONDS` より後に届いた断片は捨てる(エッジ側でも捨てられている量)。配信停止中やオフライン中は、処理済み位置が現在より約 `MAX_LATE_SECONDS` 遅れる(その範囲はビューワーが KVS から再生する)
 - ListFragments は、処理する区間がある起動ごとに 1 回(カーソル 〜 現在)。結果を起動の間キャッシュし、`common.kvs.list_fragments` はそこから返す。上流を待つ物体検出は、ウォーターマークが要る区間(上流が確定させていない区間)に来たときだけ呼ぶ(通常は 0 回)
 - 再送による重複: 同じ ProducerTimestamp の断片が KVS に 2 つ入りうる。`common.kvs.list_fragments` が ProducerTimestamp で重複を除き、clip、`segments`、`fragment_count`、GetImages の時刻はその結果に揃える
-- `common.kvs.minute_ready` は廃止(互換のため常に `(True, "watermark")` を返す。「何も届いていない = 送信が止まった」とみなして進むため、回線断のあとの断片を取りこぼした)
+- `common.kvs.minute_ready` は削除した(「何も届いていない = 送信が止まった」とみなして進むため、回線断のあとの断片を取りこぼした)
 **物体検出は動画の退避を待つ(上流)**: 物体検出は動画の退避が置いた `clip.mp4` を読むので、`run_pipeline(..., upstream_kind="VIDEO")` で動かす。
 - 区間 [s, e) は `CURSOR#VIDEO` の `processed_until` ≥ e のときだけ処理する(**物体検出の処理済み位置は動画の退避の処理済み位置を越えない**)。
   満たさなければ止めて次の起動を待つ(`stopped = waiting_upstream`、試行回数に数えない)。このとき物体検出は自分のウォーターマークを見ない(動画の退避が判定済み)

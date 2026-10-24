@@ -8,7 +8,7 @@ KVS の映像を 1 分区間ごとに S3 へ退避する Lambda。EventBridge Sc
 | `handler.py` | `lambda_handler`(環境変数を読んで `run_pipeline` を呼ぶ) |
 | `archiver.py` | 1 区間の処理(断片の一覧、clip.mp4、index.m3u8、sprite.jpg、DynamoDB の属性) |
 | `build.sh` | `build/video_archiver.zip`(リポジトリ直下)を作る。Pillow(arm64)、最小構成の PyAV(`lambdas/common/pyav_min`)、`lambdas/common` を同梱し、展開後 250 MB 以内かを確かめる |
-| `testing/` | 実 KVS での検証用の道具(H.265 送信コンテナ、調査スクリプト、ローカル実行) |
+| `tools/run_local.py` | ハンドラーをローカルから実 AWS に対して 1 回実行する(検証用) |
 
 ## 環境変数
 
@@ -105,7 +105,7 @@ HLS 方式の注意点:
 
 ### 回線断の試験(2026-10-24、実 KVS)
 
-`testing/kvssink` のコンテナ(テストパターン、H.265 600 kbps、`storage-size=512 buffer-duration=900`)を専用の Docker ネットワークに置き、
+当時の検証用の送信コンテナ(テストパターン、H.265 600 kbps、`storage-size=512 buffer-duration=900`。今は削除済みで、回線断の試験はエッジの `edge/scripts/outage-test.sh` で行う)を専用の Docker ネットワークに置き、
 `docker network disconnect` で回線を切った(DNS も引けなくなる)。ハンドラーはローカルから毎分 1 回実行。
 
 **試験 1: 4 分の遮断、`MAX_LATE_SECONDS=720`**(03:58:41 切断 → 04:02:41 復旧)
@@ -160,7 +160,7 @@ fields @timestamp, total_ms, clip_ms, sprite_ms, decode_ms, s3_ms, clip_bytes, f
 ## 実測: B 案(キーフレームをデコード、2026-10-24)
 
 `emulator/` のサンプル動画(`crosswalk_toronto.mp4`、人と車)を H.265 1280×720 15fps・キーフレーム 1 秒(約 1 Mbps)で配信し、
-`testing/kvssink` の送信コンテナで一時 KVS ストリームに送って、`build.sh` で作った zip を一時 Lambda(arm64、512 MB)で毎分 1 回動かした。
+当時の検証用の送信コンテナ(今はエッジのコンテナで代わりになるので削除済み)で一時 KVS ストリームに送って、`build.sh` で作った zip を一時 Lambda(arm64、512 MB)で毎分 1 回動かした。
 一時関数の IAM には GetImages の権限を付けていない(呼べば AccessDenied になる)。
 
 | メモリ | Duration(REPORT) | 内訳(clip / sprite(うちデコード・縮小)/ S3) | Max Memory Used | GB 秒 / 区間 |
@@ -204,25 +204,23 @@ S3 と DynamoDB は moto、KVS はスタブ(実 AWS には接続しない)。ス
 
 ## 実 KVS での検証手順
 
+KVS への送信はエッジのコンテナ(エミュレーターの H.265 を再エンコードせずに送る)を使う。全体を通す確認は [docs/e2e.md](../../docs/e2e.md)(`scripts/e2e/run.sh`)。
+ここでは Terraform を使わずに、ハンドラーだけを手元から実 KVS に対して動かす手順。
+
 ```sh
-# 1. H.265 を KVS に送るコンテナ(テストパターン + 時刻の焼き込み、kvssink)
-docker build -t cc-tmp-video-kvssink lambdas/video_archiver/testing/kvssink
-aws kinesisvideo create-stream --stream-name cc-tmp-video-cam-001 --data-retention-in-hours 1 --media-type video/h265
-aws configure export-credentials --format env-no-export > creds.env && echo AWS_DEFAULT_REGION=ap-northeast-1 >> creds.env
-docker run -d --name cc-tmp-video-sender --env-file creds.env -e STREAM_NAME=cc-tmp-video-cam-001 cc-tmp-video-kvssink
+# 1. 一時の IoT・KVS リソースを作り、エッジとエミュレーターで送る(edge/README.md の「Mac で動かす」)
+mise exec -- edge/scripts/tmp-aws.sh up
+CC_PROJECT=cc-tmp-edge CC_SINK=kvs CC_USE_SHADOW=true docker compose up --build -d
+# シャドウの desired.cameras を書くと配信が始まる(例は docs/contracts.md)
 
-# 2. 各 API の挙動を見る(ListFragments、GetImages、HLS、GetClip)
-mise exec -- uv run python testing/probe.py cc-tmp-video-cam-001 /tmp/probe 2
+# 2. ハンドラーをローカルから実行(一時のテーブルとバケットを用意しておく)
+cd lambdas/video_archiver
+STATE_TABLE=cc-tmp-edge-state MEDIA_BUCKET=cc-tmp-edge-media-<account> STREAM_NAME_PREFIX=cc-tmp-edge- \
+  mise exec -- uv run python tools/run_local.py cam-001
 
-# 3. ハンドラーをローカルから実行(一時のテーブルとバケットを用意しておく)
-STATE_TABLE=cc-tmp-video-state MEDIA_BUCKET=cc-tmp-video-media-<account> STREAM_NAME_PREFIX=cc-tmp-video- \
-  mise exec -- uv run python testing/run_local.py cam-001
-
-# 4. 出力の確認(コンテナに ffmpeg / ffprobe が入っている)
-docker run --rm -v "$PWD/out:/d" --entrypoint ffprobe cc-tmp-video-kvssink -v error -count_frames \
-  -show_entries stream=codec_name,nb_read_frames /d/clip.mp4
-docker run --rm -v "$PWD/out:/d" --entrypoint ffprobe cc-tmp-video-kvssink -v error -count_frames \
-  -protocol_whitelist file -show_entries stream=nb_read_frames /d/index.m3u8
+# 3. 出力の確認(結果の JSON の files にある S3 キーの clip.mp4 を取ってきて、手元の ffprobe などで)
+aws s3 cp s3://cc-tmp-edge-media-<account>/<files.clip> clip.mp4
+ffprobe -v error -count_frames -show_entries stream=codec_name,nb_read_frames clip.mp4
 ```
 
-終わったら `cc-tmp-video-` のストリーム、テーブル、バケット、コンテナを必ず削除する。
+終わったら `docker compose down`、`edge/scripts/tmp-aws.sh down`、一時のテーブルとバケットを必ず削除する。

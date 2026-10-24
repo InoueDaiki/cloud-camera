@@ -42,9 +42,6 @@ class DecodeResult:
     frames: list[KeyFrame]  # 時刻順
     stats: dict = field(default_factory=dict)  # ログ用
 
-    def slots(self) -> dict[int, KeyFrame]:
-        return {f.slot: f for f in self.frames}
-
 
 def anchors_from_fragments(parts: Sequence[Sequence[int]], producer_ms: Sequence[int]) -> list[tuple[int, int]]:
     """clip.mp4 の断片のオフセット(`hls.parts` の [offset, length, duration_ms])と、各断片の

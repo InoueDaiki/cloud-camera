@@ -56,11 +56,6 @@ def ceil_minute(dt: datetime) -> datetime:
     return f if f == dt else f + timedelta(minutes=1)
 
 
-def sk_of(dt: datetime) -> str:
-    """区間の件の SK(ミリ秒なし)。"""
-    return iso(floor_minute(dt))
-
-
 def from_ms(ms: int | float) -> datetime:
     return datetime.fromtimestamp(float(ms) / 1000, UTC)
 

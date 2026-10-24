@@ -40,7 +40,9 @@ React + TypeScript + Vite。UI は [Mantine](https://mantine.dev/)、再生は [
 - HLS に切り替える条件: API が 409(WebRTC を止めている、オフライン、エッジの master が待ち受けていない)、最初の映像が 10 秒以内に出ない、
   ICE が 5 秒以上 failed / disconnected のまま。再生中に切れた・映像が 8 秒止まったときは開き直す(WebRTC をもう一度試し、だめなら HLS)
 - 映像の右上の再生元に「ライブ │ WebRTC · H.265」「ライブ │ HLS · H.265」と小さく出す(マウスを乗せると、TURN 経由か、HLS に切り替えた理由)
-- 検証用の URL の引数: `?live=hls`(WebRTC を使わない)、`?live=h264`(WebRTC で H.264 だけ)
+- 検証用の URL の引数: `?live=hls`(WebRTC を使わない)、`?live=h264`(WebRTC で H.264 だけ)。
+  本番のビルドでも有効にしている。理由: デプロイ済みの環境で HLS と WebRTC の遅延を比べる計測(docs/webrtc.md)に使うことと、
+  回線が細い・H.265 の WebRTC がうまく動かない端末の逃げ道になること。変わるのはライブの方式の選び方だけで、API の権限や見られる範囲は変わらない
 - モック(`dev:mock`)では API が `mock: true` を返し、同じページ内の疑似 master(`src/mocks/rtcMaster.ts`。canvas のテストパターン)につなぐ。
   玄関は WebRTC、駐車場は WebRTC を止めているので HLS になる
 
@@ -95,6 +97,9 @@ mise exec -- npm test
 # スクリーンショット(dev:mock を起動しておく)。ライト/ダーク × デスクトップ/スマホ幅
 mise exec -- npx playwright install chromium
 mise exec -- node scripts/screenshots.mjs <出力先> http://localhost:5173/
+
+# コーデックの切り替えをまたぐ録画を本物の Chrome(hls.js)で再生できるか(デプロイ済みの環境で。docs/codec.md)
+mise exec -- node scripts/codec-play.mjs <CloudFront の URL> <camera_id> <from ISO> <to ISO> [出力先]
 ```
 
 ## 構成

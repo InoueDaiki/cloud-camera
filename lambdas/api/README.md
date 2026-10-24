@@ -14,7 +14,6 @@ API の形は [docs/contracts.md](../../docs/contracts.md) の「HTTP API」、�
 | `app/ptz.py` | `POST /api/cameras/{id}/ptz`(IoT Core の cmd トピックへ publish)、`GET /api/cameras/{id}/ptz`(シャドウ) |
 | `app/search.py` / `prompt.py` / `events.py` / `sql_guard.py` / `athena.py` | `POST /api/search`(Bedrock Converse のツール使用 → 引数付き検索か SQL ガード → Athena → 回答の検査) |
 | `local_server.py` | ローカル開発用サーバー |
-| `scripts/e2e_search.py` | 検索の end-to-end 検証(一時リソースを作って消す) |
 | `bench/` | 検索の評価セット(合成データ、質問と正解、採点、実行)。zip には入れない |
 
 ## 開発
@@ -236,13 +235,9 @@ Bedrock の呼び出し平均 1.9 回、2.5 秒)。入力の大半は毎回送�
 
 ### end-to-end 検証
 
-```sh
-cd lambdas/api
-mise exec -- uv run python scripts/e2e_search.py setup      # cc-tmp-api-<account> バケット、cc_tmp_api_e2e、cc-tmp-api-wg
-mise exec -- uv run python scripts/e2e_search.py run [--model ...] [--question ...]
-mise exec -- uv run python scripts/e2e_search.py teardown   # 必ず実行
-mise exec -- uv run python scripts/e2e_search.py check      # remaining: none を確認
-```
+デプロイした環境での検索の確認は、全体の E2E([docs/e2e.md](../../docs/e2e.md))の `search` の段階で行う。
+デプロイせずに実 Bedrock + Athena で試すときは、上の評価セット(`bench.run_bench setup` → `run --id <問の ID>` → `teardown`)を使う
+(以前の `scripts/e2e_search.py` は評価セットと同じことをしていたので、評価セットに統合して削除した。コミット 37dc0ef までの履歴にある)。
 
 ## 既知の制約
 

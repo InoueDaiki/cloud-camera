@@ -6,8 +6,9 @@
 契約は [contracts.md](contracts.md)(シャドウと status の `webrtc`、`GET /api/cameras/{id}/webrtc`)、決定は [decisions.md](decisions.md)。
 提案から変えた点は §10。
 
-試作のコードは [edge/webrtc/](../edge/webrtc/)(master のコンテナ)と [scripts/webrtc/](../scripts/webrtc/)(確認ビューワー、署名付き URL の発行、
-一時リソース、計測)。使い方は [edge/webrtc/README.md](../edge/webrtc/README.md)。
+試作の master は [edge/webrtc/](../edge/webrtc/)(本実装に引き継いだ)。確認ビューワー、署名付き URL の発行、一時リソース、計測のスクリプト(`scripts/webrtc/`)は
+本実装(API、ビューワー、Terraform、E2E)に置き換わったので削除した(コミット 37dc0ef までの履歴にある。`git show 37dc0ef:scripts/webrtc/serve.py` など)。
+今の確認は [e2e.md](e2e.md) の `webrtc-h265` / `webrtc-h264` / `hls-fallback` / `ptz`。使い方は [edge/webrtc/README.md](../edge/webrtc/README.md)。
 
 ## 結論
 
@@ -93,19 +94,19 @@ README の「Setup IoT」は次の 5 つのアクションを、ロールエイ�
 
 試作では既存と同じ形のロールエイリアス(`cc-tmp-webrtc-kvs-role-alias`)のロールに、PutMedia と並べて上の 4 つ(Create 以外)を
 `channel/cc-tmp-webrtc-*/*` に許可し、kvssink と master が**同じ証明書・同じロールエイリアス**で動くことを確認した
-([scripts/webrtc/tmp-aws.sh](../scripts/webrtc/tmp-aws.sh))。証明書は `edge/.certs/<gateway_id>/`(`provision-edge.sh` の出力)をそのままマウントした。
+(試作の `scripts/webrtc/tmp-aws.sh`。削除済み)。証明書は `edge/.certs/<gateway_id>/`(`provision-edge.sh` の出力)をそのままマウントした。
 
 ### ビューワー
 
 - ConnectAsViewer は SigV4 のクエリ署名(サービス名 `kinesisvideo`)を付けた WSS の URL。署名はサーバーでできる。JS SDK の README も
   「NodeJS backend to sign requests and send them back to a client so that the client does not need to have AWS credentials」と書いている
   ([SigV4RequestSigner](https://github.com/awslabs/amazon-kinesis-video-streams-webrtc-sdk-js#class-sigv4requestsigner))。
-  `SignalingClient` は `requestSigner` を差し替えられるので、署名済みの URL を返すだけの signer を渡せばよい(試作の [viewer.js](../scripts/webrtc/viewer/viewer.js))。
+  `SignalingClient` は `requestSigner` を差し替えられるので、署名済みの URL を返すだけの signer を渡せばよい(試作の `scripts/webrtc/viewer/viewer.js`。今は [viewer/src/player/webrtcLive.ts](../viewer/src/player/webrtcLive.ts))。
 - TURN の認証情報は GetIceServerConfig が返す(有効期間は **300 秒固定**、[IceServer](https://docs.aws.amazon.com/kinesisvideostreams/latest/dg/API_signaling_IceServer.html))。
   これもサーバーで呼んでブラウザに渡せる。
 - 署名付き URL の有効期間は JS SDK に合わせて `X-Amz-Expires=299`。KVS が受け付ける上限は公表されていない(未確認)。
   発行から 5 分以内に接続すればよく、接続後は ICE が終われば WSS は閉じてもピア接続は続く。
-- 試作の [serve.py](../scripts/webrtc/serve.py) は `cloud-camera` プロファイルの認証情報で署名と GetIceServerConfig を行い、
+- 試作の `scripts/webrtc/serve.py`(削除済み。今は [lambdas/api/app/webrtc.py](../lambdas/api/app/webrtc.py))は `cloud-camera` プロファイルの認証情報で署名と GetIceServerConfig を行い、
   ブラウザには `wss_url`、`ice_servers`、`channel_arn`、`client_id` だけを返す。発行にかかった時間は 200〜250 ms(チャネルの ARN とエンドポイントはキャッシュ)。
 
 ## 4. 料金(東京)
@@ -192,7 +193,7 @@ AWS Price List(`AmazonKinesisVideo`、publicationDate 2026-09-30)で確認した
 ### PTZ の操作 → ブラウザの映像が変わるまで
 
 エッジのコンテナで既存の PTZ クライアント(`cc_edge.ptz.PtzClient`)から最大倍率への AbsoluteMove を送り、ブラウザ側で
-映像の静止した領域の変化を `requestVideoFrameCallback` で検出した時刻との差([measure.mjs](../scripts/webrtc/measure/measure.mjs) `--ptz`)。
+映像の静止した領域の変化を `requestVideoFrameCallback` で検出した時刻との差(試作の `scripts/webrtc/measure/measure.mjs` の `--ptz`。削除済み。今は [scripts/e2e/browser.mjs](../scripts/e2e/browser.mjs) の `ptz`)。
 MQTT(API → IoT Core → エッジ)の配送は含まない。
 
 | 方式 | 中央値(最小〜最大) | 回数 |
@@ -209,7 +210,7 @@ MQTT(API → IoT Core → エッジ)の配送は含まない。
 
 ### エッジの負荷と上り帯域
 
-[docker_stats.py](../scripts/webrtc/measure/docker_stats.py) で 30 秒の平均。CPU は Apple Silicon の 1 コアに対する割合。
+試作の `scripts/webrtc/measure/docker_stats.py`(削除済み。`docker stats` を 30 秒集めるだけのもの)で 30 秒の平均。CPU は Apple Silicon の 1 コアに対する割合。
 
 | 状態 | master の CPU | master のメモリ | master の送信 | kvssink(既存のエッジ)の CPU |
 | --- | --- | --- | --- | --- |
@@ -286,7 +287,7 @@ MQTT(API → IoT Core → エッジ)の配送は含まない。
  "expires_at": "2026-10-24T05:09:57Z"}
 ```
 
-試作の [serve.py](../scripts/webrtc/serve.py) の `issue_viewer_session` をそのまま Lambda に移せる(boto3 の `kinesisvideo` と `kinesis-video-signaling`、
+試作の `serve.py` の `issue_viewer_session` をそのまま Lambda に移せる(boto3 の `kinesisvideo` と `kinesis-video-signaling`、
 botocore の `SigV4QueryAuth`)。チャネルの ARN とエンドポイントは Lambda のコンテナ内でキャッシュする(DescribeSignalingChannel は 1 チャネル 5 TPS)。
 `client_id` はリクエストごとにランダムにする(視聴者の区別に使う)。エラーは既存と同じ `{"error": {...}}`
 (`CAMERA_OFFLINE`、`WEBRTC_DISABLED` など)。
@@ -303,7 +304,7 @@ botocore の `SigV4QueryAuth`)。チャネルの ARN とエンドポイントは
 ## 9. 試作の再現と一時リソース
 
 - 一時リソース(すべて `cc-tmp-webrtc` で始まる): IAM ロール、ロールエイリアス、IoT ポリシー、Thing、証明書、KVS ストリーム、シグナリングチャネル。
-  `scripts/webrtc/tmp-aws.sh up / down / check`
+  試作の `scripts/webrtc/tmp-aws.sh up / down / check`(削除済み。本実装の確認は Terraform の一時環境 `scripts/e2e/run.sh cc-tmp-*` で行う)
 - 2026-10-24 の試作のあと `down` で削除し、`check` で何も残っていないことを確認した
 
 ## 10. 本実装(§8 からの変更点)

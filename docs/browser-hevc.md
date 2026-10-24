@@ -163,13 +163,13 @@ caniuse の 94.94% は世界・全体の録画の上限側とおおむね合う�
 | 社用スマホ(iPhone 60%、Android 40%) | 98〜100% | 81〜91% | 0.6×(0.85〜0.95) + 0.4×(0.72〜0.86) |
 
 B2B では**一般より結果がぶれやすい**。会社の標準ブラウザ(Edge か Chrome か)と、VDI を使っているかどうかで、ほぼ 0% からほぼ 100% まで変わる。
-導入先ごとに確認ページ(`scripts/browser-check/`)を開いてもらうのが確実。
+導入先ごとに確認ページ(`tools/browser-check/`)を開いてもらうのが確実。
 
 ## 3. 実機での確認
 
 ### 3.1 確認ページとスクリプト
 
-`scripts/browser-check/`:
+`tools/browser-check/`:
 
 | ファイル | 内容 |
 | --- | --- |
@@ -189,7 +189,7 @@ B2B では**一般より結果がぶれやすい**。会社の標準ブラウザ
 - 送信側に H.265 エンコーダーがあれば、同じページ内の折り返し接続で H.265 だけを使い、受信側で `framesDecoded` が増えるか
 
 ```sh
-cd scripts/browser-check
+cd tools/browser-check
 mise exec -- npm install
 mise exec -- npx playwright install firefox   # Firefox を使うとき(webkit / chromium も同様)
 mise exec -- npm run check                    # headless。--headed、--only chrome,webkit も使える

@@ -2,7 +2,7 @@
 
     cd lambdas/video_archiver
     STATE_TABLE=... MEDIA_BUCKET=... STREAM_NAME_PREFIX=... \\
-      mise exec -- uv run python testing/run_local.py cam-001
+      mise exec -- uv run python tools/run_local.py cam-001
 """
 
 import json

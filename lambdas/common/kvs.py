@@ -24,9 +24,7 @@ from .timeutil import epoch_ms, to_utc
 # GetDataEndpoint の APIName
 LIST_FRAGMENTS = "LIST_FRAGMENTS"
 GET_IMAGES = "GET_IMAGES"
-GET_CLIP = "GET_CLIP"
 GET_HLS_STREAMING_SESSION_URL = "GET_HLS_STREAMING_SESSION_URL"
-GET_MEDIA_FOR_FRAGMENT_LIST = "GET_MEDIA_FOR_FRAGMENT_LIST"
 
 ENDPOINT_TTL_SECONDS = 3600
 _BOTO_CONFIG = Config(retries={"max_attempts": 5, "mode": "standard"}, connect_timeout=5, read_timeout=30)
@@ -233,15 +231,6 @@ def watermark_ms(fragments: list[Fragment]) -> int | None:
     if not fragments:
         return None
     return max(f.end_ms for f in fragments)
-
-
-def minute_ready(*args: Any, **kwargs: Any) -> tuple[bool, str]:
-    """廃止。互換のためだけに残す(呼び出し側を消すまで)。
-
-    断片が出そろったかは run_pipeline がウォーターマークで判定してから process_minute を呼ぶので、常に (True, "watermark")。
-    以前の判定(最近何も届いていなければ「送信が止まった」とみなす)は、回線断のあとに届く断片を取りこぼす原因だった。
-    """
-    return True, "watermark"
 
 
 MAX_PAD_MS = 250

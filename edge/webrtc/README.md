@@ -42,7 +42,7 @@
 
 試作(サイドカーのコンテナ、2026-10-24 午前)は 1 プロセス 1 コーデックで、`CC_RTSP_URL` / `CC_WEBRTC_CODEC` を受けていた。
 本実装では main と sub を 1 プロセスで扱い、視聴者ごとにコーデックを選ぶ。サイドカーの Dockerfile と compose は削除した。
-試作の確認ビューワーと計測([scripts/webrtc/](../../scripts/webrtc/))は、エッジ(リポジトリ直下の compose)が master を動かしていればそのまま使える。
+試作の確認ビューワーと計測(`scripts/webrtc/`)は、本実装のビューワー・API・E2E([docs/e2e.md](../../docs/e2e.md))に置き換わったので削除した(コミット 37dc0ef までの履歴にある)。
 
 ## 制約
 
