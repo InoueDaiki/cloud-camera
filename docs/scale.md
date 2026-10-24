@@ -8,7 +8,7 @@
 | 台数 | 詰まるもの | 種類 |
 | --- | --- | --- |
 | **約 20〜40 台** | **このアカウントの Lambda の同時実行の上限が 10**(既定の 1,000 ではない)。10 台で平均 2.7、最大 6 を使った。ほかの検証環境(`cc-tmp-e2e` など)と共有で、API の Lambda(同期)も同じ枠を使う | **引き上げ申請が必須**(Service Quotas「Concurrent executions」、調整可) |
-| **約 190 台** | Lambda の環境変数の合計 4 KB(引き上げ不可)。`CAMERAS`(カメラ → ゲートウェイの JSON)が 1 台あたり 19 バイト増え、約 190 台で `terraform apply` が失敗する | **設計変更**(カメラ一覧を DynamoDB か S3 に置く) |
+| **約 85〜190 台** | Lambda の環境変数の合計 4 KB(引き上げ不可)。`CAMERAS`(カメラ → ゲートウェイの JSON)が 1 台あたり 19 バイト増え、約 190 台で `terraform apply` が失敗する。main で追加された `CAMERA_NAMES`(表示名)を全台に付けると 1 台あたり約 20〜27 バイト増え、約 85〜100 台に下がる | **設計変更**(カメラ一覧を DynamoDB か S3 に置く) |
 | 約 15〜20 台 / ゲートウェイ | IoT のシャドウ文書 8 KB。1 つのクラシックシャドウに配下の全カメラの desired と reported を入れているので、1 台あたり約 340 バイト(PTZ 対応ならもっと)で 20 台前後が上限 | 設計変更(カメラごとの名前付きシャドウ)か、ゲートウェイを分ける |
 | 約 110 ゲートウェイ | api のロールのインラインポリシー 10,240 文字(Thing の ARN を 1 つずつ列挙していた) | **実装済み**(ワイルドカードにした) |
 | 約 700 台(障害の後) | 既定の同時実行 1,000。止まっていた分を追い上げると、1 起動が最大 10 区間(物体検出は約 2 分)になり、同時実行が平常の約 6 倍(台数 × 1.4)になる | 引き上げ申請、または追い上げの同時実行を絞る設計 |
@@ -30,7 +30,7 @@
 | Lambda 同時実行(平常の平均 / ピーク) | 動画 2.36 秒 + 検出 11.7 秒 = 0.23 | 23 / 38 | 234 / 281 | 2,340 / 2,490 | 既定 1,000(このアカウントは **10**)、調整可 | このアカウント: 100 台で NG。既定: 1 万台で NG |
 | Lambda 同時実行(障害の後の追い上げ) | 1 起動 10 区間 × 2 関数(リースでカメラごとに 1 本まで) | 140 | 1,400 | 14,000 | 同上 | 既定: 1,000 台で NG |
 | Lambda のスケーリング速度 | — | — | — | 2,500 環境 | 関数ごとに 10 秒あたり 1,000 環境 | OK(立ち上がりに約 25 秒) |
-| Lambda の環境変数(api、動画、検出) | 1 台 19 バイト + 共通 約 500 バイト | 2.4 KB | 19.5 KB | 190 KB | 4 KB(引き上げ不可) | **約 190 台で NG** |
+| Lambda の環境変数(api、動画、検出) | 1 台 19 バイト(`CAMERAS`)+ 表示名を付ければ約 20〜27 バイト(`CAMERA_NAMES`)+ 共通 約 500 バイト | 2.4〜4.7 KB | 19.5〜46 KB | 190〜460 KB | 4 KB(引き上げ不可) | **約 190 台(表示名ありなら約 85〜100 台)で NG** |
 | EventBridge Scheduler のスケジュール数 | 2 本 / 台 | 200 | 2,000 | 20,000 | 1,000 万 | OK |
 | Scheduler の起動 | 2 回 | 3.3 TPS | 33 TPS | 333 TPS | 1,000 TPS(東京。超えると遅れる) | OK |
 | KVS GetDataEndpoint(変更前の見込み) | 0.21 回(10 台。ほぼコールドスタートの分) | 0.1 TPS | 22 TPS | **約 460 TPS** | アカウント 300 TPS、ストリーム 5 TPS(引き上げ不可) | 変更前: 約 6,500 台で NG |
@@ -64,7 +64,8 @@
   [DynamoDB クォータ](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html)、[オンデマンドの初期スループット](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/on-demand-capacity-mode.html)、
   [IoT Core クォータ](https://docs.aws.amazon.com/general/latest/gr/iot-core.html)、[S3 の性能](https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance.html)、
   [Athena クォータ](https://docs.aws.amazon.com/general/latest/gr/athena.html)、[API Gateway クォータ](https://docs.aws.amazon.com/apigateway/latest/developerguide/limits.html)、[IAM クォータ](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html)。
-  このアカウントの値は `aws lambda get-account-settings`(`ConcurrentExecutions: 10`)と Service Quotas で確認した
+  このアカウントの値は `aws lambda get-account-settings`(`ConcurrentExecutions: 10`)と Service Quotas で確認した。
+  環境変数の大きさは cc-tmp-scale(10 台)の api の実際の設定から測った(合計 691 バイト、うち `CAMERAS` 191 バイト)。`CAMERA_NAMES` は計測後に main で追加されたもので、1 台あたりの増え方は日本語 2〜5 文字の名前を仮定した見込み
 
 ### 上限の主な値(一次情報、2026-10-24 に確認)
 
@@ -196,7 +197,7 @@ Scheduler では一斉起動を作れなかったので、スケジュールを�
 | 弱点 | 当たる台数 | 案 |
 | --- | --- | --- |
 | Lambda の同時実行がアカウントで共有。このアカウントは 10 | 20〜40 台 | まず Service Quotas で引き上げる(1 万台なら平常 2,500、追い上げを考えると 5,000 程度)。本番と検証を別アカウントにする(同時実行も KVS のストリーム数もアカウント単位)。api に予約同時実行を付けて、録画処理の追い上げで API が 429 にならないようにする(未予約を 100 残す必要があるので、上限の引き上げが先) |
-| `CAMERAS` を環境変数で渡している(4 KB) | 約 190 台 | カメラ → ゲートウェイの対応を DynamoDB の状態テーブル(例: SK `CAMERA`)か S3 の JSON に置き、api はそこから読む(起動中はキャッシュ)。動画と検出は使っていないので外す |
+| `CAMERAS`、`CAMERA_NAMES` を環境変数で渡している(合計 4 KB) | 約 190 台(表示名ありなら約 85〜100 台) | カメラ → ゲートウェイの対応と表示名を DynamoDB の状態テーブル(例: SK `CAMERA`)か S3 の JSON に置き、api はそこから読む(起動中はキャッシュ)。動画と検出は使っていないので、環境変数を関数ごとに分けて外す |
 | 障害の後の追い上げで同時実行が平常の約 6 倍 | 約 700 台(既定 1,000) | 1 起動の区間数(`MAX_MINUTES` 10)を検出だけ小さくする、または下の SQS 案で同時実行の上限を付ける |
 | カメラ × 2 本のスケジュール。検出は動画を待つだけ(平均 40 秒遅れる) | 遅れは台数によらない。本数は 1 万台で 2 万本(上限には遠い) | 動画の退避が区間を確定させたら、物体検出を非同期で起動する(スケジュールはカメラ × 1 本、`waiting_upstream` がなくなり、検出の遅れが数秒になる)。検出用のスケジュールは取りこぼしの保険として 5 分おきなどに残す |
 | (同上)スケジュールの本数と Terraform の state | 1,000 台〜 | 1 本のスケジュール(1 分ごと)→ 振り分けの Lambda → SQS(カメラごとのメッセージ、`DelaySeconds` で散らす)→ イベントソースマッピングの最大同時実行で上限を付ける。下の比較 |
