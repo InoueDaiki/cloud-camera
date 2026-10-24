@@ -9,3 +9,5 @@ mise trust && mise install
 ```
 
 AWS CLI のプロファイル `cloud-camera`、リージョン `ap-northeast-1` は `mise.toml` で設定される。
+
+全体を通す検証(E2E)は [docs/e2e.md](docs/e2e.md)(`scripts/e2e/run.sh`)。
