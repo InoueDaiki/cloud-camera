@@ -195,7 +195,8 @@ def stage_kvs(a) -> str:
     def check():
         now = utcnow()
         frags = kvs_list_fragments(stream, now - timedelta(minutes=2), now + timedelta(minutes=1))
-        if len(frags) < 5:
+        # 次の api-kvs で ON_DEMAND の範囲に断片が入るよう、15 秒ぶん届くまで待つ
+        if len(frags) < 15:
             raise Fail(f"断片 {len(frags)} 本")
         # 前回の実行の断片が残っていることがあるので、今届いているか(最新が 20 秒以内か)まで待つ
         lag = (utcnow() - max(f["ProducerTimestamp"] for f in frags)).total_seconds()
@@ -203,7 +204,7 @@ def stage_kvs(a) -> str:
             raise Fail(f"最新の断片が {lag:.0f} 秒前")
         return frags
 
-    frags = poll(check, a.timeout, 5, "KVS の断片 5 本以上")
+    frags = poll(check, a.timeout, 5, "KVS の断片 15 本以上")
     now = utcnow()
     latest = max(frags, key=lambda f: f["ProducerTimestamp"])
     lag = (now - latest["ProducerTimestamp"]).total_seconds()
@@ -247,7 +248,7 @@ def stage_api_kvs(a) -> str:
     for mode in ("LIVE", "ON_DEMAND"):
         q = f"mode={mode}"
         if mode == "ON_DEMAND":
-            q += f"&from={iso(now - timedelta(minutes=2))}&to={iso(now - timedelta(seconds=10))}"
+            q += f"&from={iso(now - timedelta(minutes=2))}&to={iso(now)}"
         r = api_json("GET", f"/api/cameras/{CAMERA}/kvs-hls?{q}")
         url = r.get("url")
         if not url:
