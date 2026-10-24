@@ -34,7 +34,7 @@ scripts/destroy.sh cc-tmp-foo
 | `kvs_retention_hours` | 1 | KVS の保持期間 |
 | `media_retention_days` | 30 | メディアバケットの保存日数(Lambda の `MEDIA_RETENTION_DAYS`) |
 | `lag_seconds` / `max_minutes` / `max_attempts` | 45 / 10 / 5 | Lambda の環境変数にそのまま渡す |
-| `lambda_settings` | `{}` | 関数ごとの `memory_size` / `timeout` / `ephemeral_storage` の上書き。既定は `locals.tf`(video_archiver 1024MB・300 秒、detector 3008MB・300 秒、api 512MB・30 秒) |
+| `lambda_settings` | `{}` | 関数ごとの `memory_size` / `timeout` / `ephemeral_storage` の上書き。既定は `locals.tf`(video_archiver 512MB・300 秒、detector 3008MB・300 秒、api 512MB・30 秒) |
 | `lambda_layers` | `{}` | 関数ごとのレイヤー ARN(例: `{detector = ["arn:...:AWSSDKPandas-Python313-Arm64:N"]}`) |
 | `lambda_zip_dir` | null(リポジトリ直下の `build/`) | zip の置き場所 |
 | `bedrock_model_id` | `jp.amazon.nova-2-lite-v1:0` | 推論プロファイル ID か基盤モデル ID |

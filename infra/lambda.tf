@@ -162,7 +162,11 @@ data "aws_iam_policy_document" "lambda" {
         "kinesisvideo:ListFragments",
         "kinesisvideo:GetClip",
         "kinesisvideo:GetImages",
-        "kinesisvideo:GetMediaForFragmentList",
+        "kinesisvideo:GetHLSStreamingSessionURL",
+        "kinesisvideo:GetHLSMasterPlaylist",
+        "kinesisvideo:GetHLSMediaPlaylist",
+        "kinesisvideo:GetMP4InitFragment",
+        "kinesisvideo:GetMP4MediaFragment",
       ]
       detector = [
         "kinesisvideo:DescribeStream",
