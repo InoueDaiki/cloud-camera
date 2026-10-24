@@ -114,7 +114,7 @@ def run_pipeline(kind: Literal["VIDEO", "DETECT"], camera_id: str,
 - 限界: `MAX_LATE_SECONDS` より後に届いた断片は捨てる(エッジ側でも捨てられている量)。配信停止中やオフライン中は、処理済み位置が現在より約 `MAX_LATE_SECONDS` 遅れる(その範囲はビューワーが KVS から再生する)
 - ListFragments は、処理する区間がある起動ごとに 1 回(カーソル 〜 現在)。結果を起動の間キャッシュし、`common.kvs.list_fragments` はそこから返す
 - 再送による重複: 同じ ProducerTimestamp の断片が KVS に 2 つ入りうる。`common.kvs.list_fragments` が ProducerTimestamp で重複を除き、clip、`segments`、`fragment_count`、GetImages の時刻はその結果に揃える
-- `common.kvs.minute_ready` は廃止(「何も届いていない = 送信が止まった」とみなして進むため、回線断のあとの断片を取りこぼした)
+- `common.kvs.minute_ready` は廃止(互換のため常に `(True, "watermark")` を返す。「何も届いていない = 送信が止まった」とみなして進むため、回線断のあとの断片を取りこぼした)
 `{kind}_attempts` は処理の前に 1 足す(タイムアウトで落ちても数える)。失敗の理由は `{kind}_error`(S、`video_error` / `detect_error`)に残し、成功したら消す。
 詳細は [lambdas/common/README.md](../lambdas/common/README.md)。
 Scheduler からの入力は `{"camera_id": "cam-001"}`。カメラごとに 1 本のスケジュールを作る。

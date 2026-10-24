@@ -195,3 +195,8 @@ def test_get_images_pages_and_decodes(monkeypatch):
     assert [g.ts_ms for g in got] == [epoch_ms(T(10, 20, s)) for s in (0, 1, 2)]
     assert got[0].content == jpg and got[2].content is None and got[2].error == "NO_MEDIA"
     st.assert_no_pending_responses()
+
+
+def test_minute_ready_is_deprecated_and_always_ready():
+    # 互換のための残骸。判定は run_pipeline のウォーターマークが行う
+    assert kvs.minute_ready("s", T(10, 21), T(10, 21, 1), quiet_seconds=30, max_wait_seconds=600) == (True, "watermark")
