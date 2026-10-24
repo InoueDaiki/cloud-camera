@@ -55,8 +55,10 @@ scripts/destroy.sh cc-tmp-e2e           # 手で消すとき(AUTO_APPROVE=1 で�
 | `detect` | `detect_status=DONE` で `detect_count > 0` の区間があり、`detections/dt=<日>/cam-001.parquet` があり、Athena で label ごとの件数が引ける(テストパターンでは検出 0 件で失敗する) | detector のログ、Glue のパーティションプロジェクション |
 | `api-s3` | timeline に `source=s3` の範囲(と s3 → kvs の継ぎ目の秒数)、vod.m3u8 に EXT-X-MAP / PROGRAM-DATE-TIME / BYTERANGE があり ffprobe で hevc | API の DynamoDB の読み方、CloudFront の `/media/*` |
 | `search` | `POST /api/search` が回答を返す。detector が本物なら SQL が実行されていること | Bedrock のモデルアクセス、Athena |
+| `cursors` | 60 秒のあいだ 10 秒ごとに `CURSOR#DETECT` と `CURSOR#VIDEO` の `processed_until` を読み、物体検出の処理済み位置が動画の退避の処理済み位置を越えないこと(`/api/cameras` の値も) | detector が退避を待たずに進んでいる(common の区間の条件) |
 | `browser-<b>-live` / `-kvs` / `-s3` | CloudFront の URL を実ブラウザで開き、ライブ、直近の録画(処理済み位置より後、KVS ON_DEMAND)、録画(S3 の vod.m3u8)のそれぞれで、映像右上の再生元の表示が切り替わり、4 秒で currentTime が 1.5 秒以上進み、`videoWidth > 0`、`video.error` もエラー表示もないこと。スクリーンショットを撮る | 下の「ブラウザと H.265」 |
 | `stop` | `PUT /api/cameras/cam-001/streaming {"streaming": false}` で `reported.streaming=false` になる | エッジのシャドウ差分の適用 |
+| `getimages` | CloudWatch の `AWS/KinesisVideo` `GetImages.Requests`(ストリーム単位、配信開始の 10 分前から)の合計が 0。メトリクスは数分遅れるので `ListFragments.Requests` が見えるまで待つ。参考に `GetMP4MediaFragment.Requests` も出す | スプライトや推論が予備の経路(GetImages)に落ちている。Lambda のログで FAILED や clip.mp4 の読み込み失敗を見る |
 | `edge-down` | compose を止める(ログを保存) | |
 | `destroy` | `scripts/destroy.sh <project>`(`AUTO_APPROVE=1`) | バケットの中身、CloudFront の削除待ち |
 | `residue` | タグ `Project=<project>`、S3、ロググループ、KVS、IoT(Thing、ポリシー、ロールエイリアス、deploy 時に控えた証明書 ID)、スケジュールグループ、DynamoDB、Glue、Athena、IAM ロール、CloudFront に残りがない(最大 3 分待つ) | 削除の失敗。手で消す |
@@ -111,7 +113,7 @@ mise exec -- node scripts/e2e/browser.mjs --url https://dxxxx.cloudfront.net --o
 | stop | 3 |
 | destroy(CloudFront の無効化と削除が大半) | 約 210 |
 
-エッジのイメージを初めてビルドするときは kvssink のビルドで 10 分以上かかる。
+エッジのイメージを初めてビルドするときは kvssink のビルドで 10 分以上、Lambda の最小構成の PyAV(`lambdas/common/pyav_min`)を初めてビルドするときは FFmpeg のコンパイルで数分かかる(以降は `build/.cache/pyav_min` のキャッシュ)。
 
 ## よくある失敗と対処
 

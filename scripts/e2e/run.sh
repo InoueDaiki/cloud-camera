@@ -228,9 +228,12 @@ if [[ $deployed -eq 1 ]]; then
     check detect --timeout "${DETECT_TIMEOUT:-480}"
     check api-s3
     check search
+    check cursors --timeout 60
     IFS=',' read -r -a bs <<<"$BROWSERS"
     for b in ${bs[@]+"${bs[@]}"}; do browser_check "$b"; done
     check stop --timeout 90
+    # メトリクスは数分遅れるので最後のほうで見る
+    check getimages --timeout 300
   fi
   step edge-down edge_down || true
 fi

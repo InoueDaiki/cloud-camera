@@ -499,6 +499,73 @@ def stage_certs(a) -> str:
     return f"証明書 {len(ids)} 枚"
 
 
+def _cursor(table: str, kind: str) -> str | None:
+    it = boto3.client("dynamodb").get_item(
+        TableName=table, Key={"camera_id": {"S": CAMERA}, "sk": {"S": f"CURSOR#{kind}"}}, ConsistentRead=True
+    ).get("Item")
+    return it["processed_until"]["S"] if it and "processed_until" in it else None
+
+
+def stage_cursors(a) -> str:
+    """物体検出の処理済み位置が動画の退避の処理済み位置を越えない(a.timeout 秒のあいだ 10 秒ごとに見る)"""
+    t = tf()
+    samples = []
+    deadline = time.time() + a.timeout
+    while True:
+        # DETECT を先に読む(VIDEO を先に読むと、その間に両方が進んだとき偽の違反になる)
+        d = _cursor(t["state_table"], "DETECT")
+        v = _cursor(t["state_table"], "VIDEO")
+        samples.append((v, d))
+        if d and (not v or parse_iso(d) > parse_iso(v)):
+            raise Fail(f"DETECT {d} > VIDEO {v}")
+        if time.time() >= deadline:
+            break
+        time.sleep(10)
+    cams = camera_item(api_json("GET", "/api/cameras"))
+    av, ad = cams.get("video_processed_until"), cams.get("detect_processed_until")
+    if ad and av and parse_iso(ad) > parse_iso(av):
+        raise Fail(f"/api/cameras: detect {ad} > video {av}")
+    if not any(d for _, d in samples):
+        raise Fail("CURSOR#DETECT がない")
+    lags = sorted({(parse_iso(v) - parse_iso(d)).total_seconds() for v, d in samples if v and d})
+    return (f"{len(samples)} 回見て常に DETECT ≤ VIDEO(最後: VIDEO {samples[-1][0]}、DETECT {samples[-1][1]}、"
+            f"差 {lags} 秒); /api/cameras も同じ順")
+
+
+def stage_getimages(a) -> str:
+    """KVS の GetImages が呼ばれていない(CloudWatch の GetImages.Requests の合計が 0)"""
+    t = tf()
+    stream = t["kvs_streams"][CAMERA]
+    st = load_state()
+    start = parse_iso(st.get("kvs_first_seen", iso(utcnow() - timedelta(minutes=30)))) - timedelta(minutes=10)
+    cw = boto3.client("cloudwatch")
+
+    def total(metric: str) -> tuple[float, int]:
+        r = cw.get_metric_statistics(
+            Namespace="AWS/KinesisVideo", MetricName=metric,
+            Dimensions=[{"Name": "StreamName", "Value": stream}],
+            StartTime=start, EndTime=utcnow() + timedelta(minutes=1), Period=60, Statistics=["Sum"],
+        )
+        pts = r.get("Datapoints", [])
+        return sum(p["Sum"] for p in pts), len(pts)
+
+    # メトリクスは数分遅れて出る。ListFragments(退避と API が呼ぶ)が見えるまで待ってから GetImages を見る
+    def ready():
+        n, _ = total("ListFragments.Requests")
+        if n > 0:
+            return n
+        raise Fail("ListFragments.Requests もまだ出ていない(メトリクスの遅れ)")
+
+    lf = poll(ready, a.timeout, 20, "CloudWatch のメトリクス")
+    gi, gi_pts = total("GetImages.Requests")
+    mp4, _ = total("GetMP4MediaFragment.Requests")
+    detail = (f"{stream}({iso(start)} 以降): GetImages.Requests={gi:.0f}(データ点 {gi_pts})、"
+              f"ListFragments.Requests={lf:.0f}、GetMP4MediaFragment.Requests={mp4:.0f}")
+    if gi > 0:
+        raise Fail(detail)
+    return detail
+
+
 STAGES = {
     "shadow": stage_shadow,
     "kvs": stage_kvs,
@@ -511,6 +578,8 @@ STAGES = {
     "stop": stage_stop,
     "residue": stage_residue,
     "certs": stage_certs,
+    "cursors": stage_cursors,
+    "getimages": stage_getimages,
 }
 
 
