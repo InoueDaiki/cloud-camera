@@ -31,6 +31,12 @@ tf workspace select "$PROJECT" >/dev/null
 # 先にスケジュールを消す(バケットを空にしている間に Lambda が書き込まないように)
 # state にあるバケット名を読む
 buckets="$(tf output -json 2>/dev/null | jq -r '[.media_bucket, .detections_bucket, .athena_bucket, .viewer_bucket, .artifacts_bucket] | .[] | select(. != null) | .value')"
+# 途中で失敗した destroy の後は output が state から消えている。state に残っているバケットを読む
+if [[ -z "$buckets" ]]; then
+  buckets="$(tf state list 2>/dev/null | grep -E '^aws_s3_bucket\.this\[' | while read -r addr; do
+    tf state show -no-color "$addr" | awk '$1 == "bucket" { gsub(/"/, "", $3); print $3; exit }'
+  done)"
+fi
 
 if [[ -n "$buckets" ]]; then
   for group in $(aws_ scheduler list-schedule-groups --name-prefix "$PROJECT" --query 'ScheduleGroups[].Name' --output text); do
@@ -62,6 +68,15 @@ done
 echo "==> terraform destroy"
 approve=()
 [[ "${AUTO_APPROVE:-0}" == "1" ]] && approve=(-auto-approve)
-tf destroy -input=false ${approve[@]+"${approve[@]}"} -var "project=$PROJECT" "$@"
+# スケジュールを消す前に起動していた Lambda が、空にした後のバケットに書き込むことがある
+# (video_archiver は断片が出そろうのを待ってから書くので、数十秒後に PUT する)。
+# そのときは BucketNotEmpty で失敗するので、もう一度空にしてやり直す
+if ! tf destroy -input=false ${approve[@]+"${approve[@]}"} -var "project=$PROJECT" "$@"; then
+  echo "==> destroy に失敗した。バケットをもう一度空にしてやり直す"
+  for b in $buckets; do
+    empty_bucket "$b"
+  done
+  tf destroy -input=false ${approve[@]+"${approve[@]}"} -var "project=$PROJECT" "$@"
+fi
 
 echo "完了: $PROJECT を削除した"
