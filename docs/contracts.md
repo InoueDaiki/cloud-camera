@@ -80,6 +80,7 @@ PK `camera_id`(S)、SK `sk`(S)。TTL 属性 `expires_at`(数値、epoch 秒)。
 | `hls` | video_archiver | M | `{"init_length": n, "parts": [[offset, length, duration_ms], ...]}`。API が複数区間のプレイリストを組むのに使う |
 | `fragment_count` / `bytes` | video_archiver | N | 実測値 |
 | `video_duration_ms` / `video_attempts` | video_archiver | N | 実行時間、試行回数 |
+| `video_error` / `detect_error` | 各自(共通処理) | S | 最後の失敗の理由。成功したら消える |
 | `detect_status` | detector | S | `DONE` / `EMPTY` / `FAILED` |
 | `detect_count` / `frame_count` | detector | N | 検出数、推論したフレーム数 |
 | `detect_duration_ms` / `detect_attempts` | detector | N | 実行時間、試行回数 |
@@ -88,13 +89,19 @@ PK `camera_id`(S)、SK `sk`(S)。TTL 属性 `expires_at`(数値、epoch 秒)。
 **共通処理のインターフェース**(`lambdas/common/`)
 
 ```python
+from common import MinuteResult, run_pipeline   # zip の直下に common/ を同梱する
+
 def run_pipeline(kind: Literal["VIDEO", "DETECT"], camera_id: str,
                  process_minute: Callable[[str, datetime, datetime], MinuteResult],
-                 *, lag_seconds: int, max_minutes: int, max_attempts: int) -> dict
+                 *, lag_seconds: int, max_minutes: int, max_attempts: int,
+                 context=None, **testing_options) -> dict
 ```
 
 `process_minute(camera_id, start, end)` は 1 分区間を処理し、`MinuteResult(status, attributes)` を返す(`attributes` は区間の件に UpdateItem する属性)。
+`status` は `DONE` / `EMPTY`、再試行しても無駄なら `FAILED`。`context` には Lambda のコンテキストを渡す(残り時間での打ち切りとリースに使う)。
 例外を投げたら失敗扱いで、構想.md の「1回の起動での流れ」どおりに再試行・`FAILED` 確定する。
+`{kind}_attempts` は処理の前に 1 足す(タイムアウトで落ちても数える)。失敗の理由は `{kind}_error`(S、`video_error` / `detect_error`)に残し、成功したら消す。
+詳細は [lambdas/common/README.md](../lambdas/common/README.md)。
 Scheduler からの入力は `{"camera_id": "cam-001"}`。カメラごとに 1 本のスケジュールを作る。
 
 ## 検出結果: Parquet と Glue
