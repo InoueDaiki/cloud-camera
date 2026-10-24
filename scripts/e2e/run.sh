@@ -151,6 +151,8 @@ browser_check() { # ブラウザ
       modes="live,kvs,s3"
     fi
   fi
+  # PTZ は焼き込みの文字を canvas で読むので、MSE(hls.js)で再生する Chrome だけ(ネイティブ HLS の映像は canvas に描くと汚染される)
+  [[ "$b" == chrome && "${E2E_PTZ:-1}" == "1" ]] && modes="$modes,ptz"
   echo "==> browser-$b ($modes)"
   local t0=$(date +%s) url
   url="$(jq -r '.cloudfront_url.value' "$E2E_TF_JSON")"
@@ -165,7 +167,11 @@ browser_check() { # ブラウザ
     got=1
     local j="${line#RESULT }" mode ok detail
     mode="$(jq -r .mode <<<"$j")"; ok="$(jq -r .ok <<<"$j")"
+    if [[ "$mode" == ptz ]]; then
+      detail="$(jq -r '"zoom \(.zoom // "-")、POST \(.post_ms // "-")ms、GET .../ptz に反映 \(.api_ms // "未反映")ms、焼き込み 4 行目が変わるまで \(.video_ms // "変化なし")ms、位置 \(.position // {} | tostring)、error=\(.error // "なし")、\(.screenshot)"' <<<"$j")"
+    else
     detail="$(jq -r '"\(.engine // "-")、再生元=\(.chip // "-")、4 秒で \(.advanced // "-")s 進む、\(.videoWidth // 0)x\(.videoHeight // 0)、error=\(.error // "なし")、overlay=\(.overlay // "なし")、\(.screenshot)"' <<<"$j")"
+    fi
     record "browser-$b-$mode" "$([[ $ok == true ]] && echo PASS || echo FAIL)" "$el" "$detail"
   done < <(grep '^RESULT ' "$OUT/browser-$b.log")
   [[ $got -eq 1 ]] || record "browser-$b" FAIL "$el" "結果なし(ログ: $OUT/browser-$b.log)"

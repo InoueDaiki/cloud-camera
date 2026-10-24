@@ -54,7 +54,9 @@ page.on('request', (r) => {
 });
 
 const results = [];
+let quiet = false; // true の間は結果を出さない(前提の確認に checkPlaying を使うとき)
 const emit = (r) => {
+  if (quiet) return;
   results.push(r);
   console.log('RESULT ' + JSON.stringify(r));
 };
@@ -146,25 +148,130 @@ const cams = await page.evaluate(async () => (await fetch('/api/cameras')).json(
 const cam = cams.cameras.find((c) => c.camera_id === args.camera);
 const processed = cam?.video_processed_until ? Date.parse(cam.video_processed_until) : null;
 
+// 焼き込みの 4 行目(PTZ pan ... zoom ...)の白い文字の形。fontsize = 高さ / 24、行間 6、y = 16 から(emulator/streams.py)
+const ptzLineMask = () =>
+  page.evaluate(() => {
+    const v = document.querySelector('video');
+    if (!v || !v.videoWidth) return null;
+    const scale = v.videoHeight / 720;
+    const fs = Math.max(16, Math.floor(v.videoHeight / 24));
+    const y0 = Math.round(16 + 3 * (fs + 6 * scale) - 4 * scale);
+    const h = Math.round(fs + 10 * scale);
+    const w = Math.round(v.videoWidth * 0.7);
+    const c = (window.__ptzCanvas ??= document.createElement('canvas'));
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(v, 16, y0, w, h, 0, 0, w, h);
+    const d = ctx.getImageData(0, 0, w, h).data;
+    // 白い文字だけを 1 にする(背景は黒 60% の箱越しなので暗い)
+    const bits = new Uint8Array(w * h);
+    let on = 0;
+    for (let i = 0; i < w * h; i++) {
+      const lum = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+      if (lum > 180) { bits[i] = 1; on++; }
+    }
+    return { bits: Array.from(bits), on, t: v.currentTime };
+  });
+const maskDiff = (a, b) => {
+  let n = 0;
+  for (let i = 0; i < a.bits.length; i++) if (a.bits[i] !== b.bits[i]) n++;
+  return n / Math.max(1, Math.max(a.on, b.on));
+};
+
+// PTZ: absolute で zoom 1 → GET .../ptz に反映 → ライブ映像の焼き込み 4 行目が変わるまでの時間
+async function checkPtz() {
+  const cam = args.camera;
+  const ptzUrl = `/api/cameras/${cam}/ptz`;
+  const before = await page.evaluate(async (u) => (await fetch(u)).json(), ptzUrl);
+  if (!before.supported) throw new Error(`PTZ 非対応: ${JSON.stringify(before)}`);
+  // ライブで再生中にする
+  const live = page.getByRole('button', { name: 'ライブ' });
+  if (await live.isEnabled().catch(() => false)) await live.click().catch(() => undefined);
+  quiet = true;
+  const playing = await checkPlaying('live').finally(() => { quiet = false; });
+  if (!playing) throw new Error('ライブが再生されていない');
+  // 基準の形(2 秒ぶん。ノイズの大きさも見る)
+  const base = await ptzLineMask();
+  if (!base || base.on < 50) throw new Error(`4 行目の文字が見つからない(on=${base?.on})`);
+  let noise = 0;
+  for (let i = 0; i < 10; i++) {
+    await page.waitForTimeout(200);
+    const m = await ptzLineMask();
+    noise = Math.max(noise, maskDiff(base, m));
+  }
+  const target = before.zoom >= 0.5 ? 0 : 1;
+  await page.screenshot({ path: join(args.out, `${args.browser}-ptz-before.png`) });
+  const t0 = Date.now();
+  const post = await page.evaluate(async ([u, z]) => {
+    const r = await fetch(u, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'absolute', pan: 0, tilt: 0, zoom: z }) });
+    return { status: r.status, body: await r.json().catch(() => null) };
+  }, [ptzUrl, target]);
+  const postMs = Date.now() - t0;
+  if (post.status !== 202 && post.status !== 200) throw new Error(`POST ${ptzUrl} → ${post.status} ${JSON.stringify(post.body)}`);
+  let apiMs = null;
+  let videoMs = null;
+  let after = null;
+  const threshold = Math.max(0.15, noise * 3);
+  while (Date.now() - t0 < 30_000 && (apiMs === null || videoMs === null)) {
+    if (videoMs === null) {
+      const m = await ptzLineMask();
+      if (m && maskDiff(base, m) > threshold) videoMs = Date.now() - t0;
+    }
+    if (apiMs === null && (Date.now() - t0) % 500 < 120) {
+      after = await page.evaluate(async (u) => (await fetch(u)).json(), ptzUrl);
+      if (Math.abs((after.zoom ?? -1) - target) < 0.01) apiMs = Date.now() - t0;
+    }
+    await page.waitForTimeout(100);
+  }
+  await page.waitForTimeout(1500);
+  const shot = join(args.out, `${args.browser}-ptz-after.png`);
+  await page.screenshot({ path: shot });
+  emit({
+    mode: 'ptz',
+    browser: args.browser,
+    ok: apiMs !== null && videoMs !== null,
+    request_id: post.body?.request_id,
+    zoom: `${before.zoom} → ${target}`,
+    post_ms: postMs,
+    api_ms: apiMs,
+    video_ms: videoMs,
+    noise: Number(noise.toFixed(3)),
+    position: after ? { pan: after.pan, tilt: after.tilt, zoom: after.zoom, move_status: after.move_status } : null,
+    screenshot: shot,
+  });
+  // 元に戻す(後の検証と録画に影響しないように)
+  await page.evaluate(async (u) => fetch(u, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'absolute', pan: 0, tilt: 0, zoom: 0 }) }), ptzUrl);
+}
+
 for (const mode of args.modes.split(',').filter(Boolean)) {
   playlists.length = 0;
   try {
+    if (mode === 'ptz') {
+      await checkPtz();
+      continue;
+    }
     if (mode === 'live') {
       const live = page.getByRole('button', { name: 'ライブ' });
       if (await live.isEnabled().catch(() => false)) await live.click().catch(() => undefined);
     } else if (mode === 'kvs') {
       // timeline の kvs の範囲(処理済み位置より後)のうち、ライブ扱い(現在から 15 秒以内)より前
-      const now = Date.now();
+      // 退避が追いついている(処理済み位置が 1 分ごとに進む)と、KVS だけの範囲は 0〜60 秒程度しかない。
+      // 範囲が 23 秒以上になるまで最大 90 秒待つ
       let at = Number(args['kvs-at']);
-      if (!Number.isFinite(at)) {
+      let now = Date.now();
+      const deadline = now + 90_000;
+      while (!Number.isFinite(Number(args['kvs-at']))) {
+        now = Date.now();
         const from = new Date(now - 30 * 60_000).toISOString();
         const tl = await page.evaluate(async (u) => (await fetch(u)).json(), `/api/cameras/${args.camera}/timeline?from=${from}&to=${new Date(now).toISOString()}`);
         const kvs = (tl.recorded ?? []).filter((r) => r.source === 'kvs').map((r) => [Date.parse(r.start), Date.parse(r.end)]);
         const last = kvs[kvs.length - 1];
-        if (!last) throw new Error(`timeline に kvs の範囲がない(処理済み位置 ${tl.video_processed_until})`);
-        at = Math.max(last[0] + 3_000, now - 90_000);
+        at = last ? Math.max(last[0] + 3_000, now - 90_000) : NaN;
+        if (Number.isFinite(at) && at <= now - 20_000) break;
+        if (Date.now() > deadline) throw new Error(`KVS 録画の時間帯が短い(処理済み位置 ${tl.video_processed_until}、kvs の最後 ${last ? new Date(last[0]).toISOString() : 'なし'})`);
+        await page.waitForTimeout(3_000);
       }
-      if (at > now - 20_000) throw new Error(`KVS 録画の時間帯が短すぎる(${new Date(at).toISOString()})`);
       await clickAt(at);
     } else if (mode === 's3') {
       const at = Number(args['s3-at'] ?? (processed ? processed - 40_000 : NaN));

@@ -547,7 +547,7 @@ def stage_getimages(a) -> str:
             StartTime=start, EndTime=utcnow() + timedelta(minutes=1), Period=60, Statistics=["Sum"],
         )
         pts = r.get("Datapoints", [])
-        return sum(p["Sum"] for p in pts), len(pts)
+        return sum(p["Sum"] for p in pts), pts
 
     # メトリクスは数分遅れて出る。ListFragments(退避と API が呼ぶ)が見えるまで待ってから GetImages を見る
     def ready():
@@ -559,7 +559,8 @@ def stage_getimages(a) -> str:
     lf = poll(ready, a.timeout, 20, "CloudWatch のメトリクス")
     gi, gi_pts = total("GetImages.Requests")
     mp4, _ = total("GetMP4MediaFragment.Requests")
-    detail = (f"{stream}({iso(start)} 以降): GetImages.Requests={gi:.0f}(データ点 {gi_pts})、"
+    when = ", ".join(f"{iso(p['Timestamp'])}={p['Sum']:.0f}" for p in sorted(gi_pts, key=lambda p: p["Timestamp"]))
+    detail = (f"{stream}({iso(start)} 以降): GetImages.Requests={gi:.0f}" + (f"({when})" if when else "") + "、"
               f"ListFragments.Requests={lf:.0f}、GetMP4MediaFragment.Requests={mp4:.0f}")
     if gi > 0:
         raise Fail(detail)
