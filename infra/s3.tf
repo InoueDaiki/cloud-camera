@@ -172,3 +172,11 @@ resource "aws_s3_bucket_policy" "cloudfront_read" {
 
   depends_on = [aws_s3_bucket_public_access_block.this]
 }
+
+# コスト計測(tools/cost)用に PUT/GET の回数を CloudWatch に出す
+resource "aws_s3_bucket_metric" "requests" {
+  for_each = toset(["media", "detections"])
+
+  bucket = aws_s3_bucket.this[each.key].id
+  name   = "EntireBucket"
+}
