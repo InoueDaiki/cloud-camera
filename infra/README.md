@@ -38,6 +38,7 @@ scripts/destroy.sh cc-tmp-foo
 | `lambda_layers` | `{}` | 関数ごとのレイヤー ARN(例: `{detector = ["arn:...:AWSSDKPandas-Python313-Arm64:N"]}`) |
 | `lambda_zip_dir` | null(リポジトリ直下の `build/`) | zip の置き場所 |
 | `bedrock_model_id` | `jp.amazon.nova-2-lite-v1:0` | 推論プロファイル ID か基盤モデル ID |
+| `camera_names` | `{}` | カメラ ID → 表示名。自然言語検索がカメラ名(「玄関」など)を ID に結びつけるのに使う。未設定のカメラはシャドウの `name` |
 | `athena_bytes_scanned_cutoff` | 1 GiB | 1 クエリのスキャン量の上限 |
 | `schedule_enabled` | true | false でスケジュールを止める |
 | `log_retention_days` | 14 | ロググループの保持日数 |

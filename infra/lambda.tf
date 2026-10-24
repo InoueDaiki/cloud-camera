@@ -21,6 +21,8 @@ locals {
     IOT_DATA_ENDPOINT    = data.aws_iot_endpoint.data.endpoint_address
     IOT_THING_PREFIX     = local.iot_thing_prefix
     CAMERAS              = jsonencode({ for c in local.cameras : c => local.camera_gateway[c] })
+    # 自然言語検索で使うカメラの表示名(未設定のカメラはシャドウの name を使う)
+    CAMERA_NAMES = jsonencode(var.camera_names)
     # detector のフレーム源(clip = 動画の退避の clip.mp4 をデコード、getimages = KVS GetImages)と、
     # clip のときに動画の退避を待つ上限(区間の終わりからの秒。過ぎたら GetImages で取る)
     FRAME_SOURCE              = var.detector_frame_source

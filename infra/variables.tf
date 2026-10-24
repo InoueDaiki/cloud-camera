@@ -36,6 +36,12 @@ variable "cameras" {
   default     = null
 }
 
+variable "camera_names" {
+  description = "カメラ ID → 表示名(例 {\"cam-001\" = \"玄関\"})。自然言語検索が「玄関」などの名前をカメラ ID に結びつけるのに使う"
+  type        = map(string)
+  default     = {}
+}
+
 variable "kvs_retention_hours" {
   description = "KVS の保持期間(時間)"
   type        = number
