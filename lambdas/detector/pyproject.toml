@@ -1,0 +1,19 @@
+[project]
+name = "detector"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "numpy>=2.5.4",
+    "onnxruntime>=1.31.0",
+    "pillow>=13.0.0",
+    "pyarrow>=26.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "boto3>=1.43.118",
+    "moto>=5.2.4",
+    "onnx>=1.23.2",
+    "onnxscript>=0.7.2",
+    "pytest>=9.1.1",
+]
