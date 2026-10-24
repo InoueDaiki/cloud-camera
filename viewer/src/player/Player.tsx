@@ -147,7 +147,7 @@ export function Player({ pb, camera, now }: Props) {
           onClose={() => setHevcDismissed(true)}
           p="sm"
         >
-          映像は H.265(HEVC)です。Safari か、H.265 対応端末の Chrome / Edge 最新版で開いてください(Firefox は非対応)。
+          録画は H.265(HEVC)です。Chrome か Safari の最新版で開いてください。Edge では Microsoft Store の「HEVC Video Extensions」が必要です。古い PC や仮想デスクトップでは再生できないことがあります(docs/browser-hevc.md)。
           {import.meta.env.VITE_MOCK === 'true' && 'モックの映像は H.264 なので、このまま再生できます。'}
         </Alert>
       )}
