@@ -175,6 +175,7 @@ class Detector:
         graph_opt: str = "all",
         score_threshold: float = 0.3,
         nms_threshold: float = 0.45,
+        square: bool = False,
     ) -> None:
         import onnxruntime as ort
 
@@ -199,12 +200,18 @@ class Detector:
         self.fixed_hw = (shape[2], shape[3]) if all(isinstance(d, int) for d in shape[2:]) else None
         self.batch_size = 1 if isinstance(shape[0], int) else max(1, batch_size)
         self.input_width = input_width
+        # True なら 16:9 でも正方形(input_width x input_width)にレターボックスする(比較用)
+        self.square = square
         self.score_threshold = score_threshold
         self.nms_threshold = nms_threshold
         self.model_name = os.path.basename(model_path).split(".")[0]
 
     def input_hw(self, width: int, height: int) -> tuple[int, int]:
-        return self.fixed_hw or input_size_for(width, height, self.input_width)
+        if self.fixed_hw:
+            return self.fixed_hw
+        if self.square:
+            return (self.input_width, self.input_width)
+        return input_size_for(width, height, self.input_width)
 
     def detect(self, images: list[bytes], timings: dict | None = None) -> list[list[Detection]]:
         """JPEG のリストを推論し、フレームごとの検出結果を返す。timings に各段の ms を足す。"""

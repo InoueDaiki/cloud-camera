@@ -76,7 +76,7 @@ def calib_tensors(calib_dir: str, width: int) -> list[np.ndarray]:
     return out
 
 
-def quantize_int8(src: str, dst: str, calib_dir: str, width: int) -> None:
+def quantize_int8(src: str, dst: str, calib_dir: str, width: int, signed_act: bool = False) -> None:
     from onnxruntime.quantization import (
         CalibrationDataReader,
         CalibrationMethod,
@@ -105,7 +105,8 @@ def quantize_int8(src: str, dst: str, calib_dir: str, width: int) -> None:
         Reader(),
         quant_format=QuantFormat.QDQ,
         per_channel=True,
-        activation_type=QuantType.QUInt8,
+        # x86(VNNI なし)では U8S8 が飽和して精度が落ちることがあるので、S8S8 も作れるようにする
+        activation_type=QuantType.QInt8 if signed_act else QuantType.QUInt8,
         weight_type=QuantType.QInt8,
         calibrate_method=CalibrationMethod.Percentile,
         extra_options={"CalibPercentile": 99.99},
@@ -118,6 +119,7 @@ def main() -> None:
     ap.add_argument("model")
     ap.add_argument("--calib-dir")
     ap.add_argument("--width", type=int, default=416)
+    ap.add_argument("--s8s8", action="store_true", help="活性も int8 にした *.int8s8.onnx も作る")
     a = ap.parse_args()
     base = a.model.removesuffix(".onnx")
     make_dynamic(a.model, base + ".dyn.onnx")
@@ -125,6 +127,9 @@ def main() -> None:
     if a.calib_dir:
         quantize_int8(base + ".dyn.onnx", base + ".int8.onnx", a.calib_dir, a.width)
         print("作成:", base + ".int8.onnx")
+        if a.s8s8:
+            quantize_int8(base + ".dyn.onnx", base + ".int8s8.onnx", a.calib_dir, a.width, signed_act=True)
+            print("作成:", base + ".int8s8.onnx")
 
 
 if __name__ == "__main__":

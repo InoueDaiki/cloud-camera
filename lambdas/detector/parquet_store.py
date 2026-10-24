@@ -74,7 +74,8 @@ def _read(s3, bucket: str, key: str) -> tuple[pa.Table | None, str | None]:
     except s3.exceptions.NoSuchKey:
         return None, None
     body = obj["Body"].read()
-    table = pq.read_table(io.BytesIO(body))
+    # read_table は pyarrow.dataset を経由するので、軽い ParquetFile で読む
+    table = pq.ParquetFile(io.BytesIO(body)).read()
     return table, obj["ETag"]
 
 

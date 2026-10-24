@@ -44,17 +44,25 @@ def run_config(cfg: dict, frames_dir: str, n_frames: int) -> dict:
         threads=cfg.get("threads", 0),
         batch_size=cfg.get("batch", 1),
         graph_opt=cfg.get("graph_opt", "all"),
+        square=cfg.get("square", False),
     )
-    det.detect(images[:1])  # ウォームアップ
-    timings: dict = {}
     t = time.perf_counter()
-    results = det.detect(images, timings)
-    total = (time.perf_counter() - t) * 1000
+    det.detect(images[:1])  # ウォームアップ(初回はメモリ確保などで遅い)
+    first_ms = (time.perf_counter() - t) * 1000
+    totals, timings = [], {}
+    for _ in range(cfg.get("repeat", 2)):
+        timings = {}
+        t = time.perf_counter()
+        results = det.detect(images, timings)
+        totals.append((time.perf_counter() - t) * 1000)
+    total = sum(totals) / len(totals)
     return {
         **cfg,
         "frames": len(images),
         "load_ms": round(det.load_ms, 1),
+        "first_frame_ms": round(first_ms, 1),
         "total_ms": round(total, 1),
+        "max_total_ms": round(max(totals), 1),
         "per_frame_ms": round(total / len(images), 2),
         **{k: round(v, 1) for k, v in timings.items()},
         "detections": sum(len(r) for r in results),
