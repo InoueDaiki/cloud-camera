@@ -111,6 +111,15 @@ EXTRA_CONFIGS = (
 )
 
 
+# 低メモリ(1 vCPU 未満)の確認用。候補だけを、既定スレッド数と 1 スレッドで
+LOW_CONFIGS = [
+    {"model": m, "width": w, **({"threads": t} if t else {})}
+    for m, w in (("yolox_tiny.int8s8", 416), ("yolox_tiny.int8", 416), ("yolox_nano.dyn", 416),
+                 ("yolox_tiny.int8s8", 640))
+    for t in (0, 1)
+]
+
+
 def run(args) -> None:
     memories = [int(m) for m in args.memories.split(",")]
     archs = args.archs.split(",")
@@ -120,7 +129,10 @@ def run(args) -> None:
             fn = FUNCS[arch]
             for mem in memories:
                 set_memory(fn, mem)
-                configs = MAIN_CONFIGS + (EXTRA_CONFIGS if mem in extra_mems else [])
+                if args.set == "low":
+                    configs = LOW_CONFIGS
+                else:
+                    configs = MAIN_CONFIGS + (EXTRA_CONFIGS if mem in extra_mems else [])
                 # 1 回の呼び出しが 15 分を超えないよう、数件ずつに分ける
                 for i in range(0, len(configs), args.chunk):
                     chunk = configs[i:i + args.chunk]
@@ -203,6 +215,7 @@ def main() -> None:
     r.add_argument("--extra-memories", default="1769,3008")
     r.add_argument("--archs", default="arm64,x86_64")
     r.add_argument("--chunk", type=int, default=6)
+    r.add_argument("--set", choices=["main", "low"], default="main")
     sub.add_parser("cleanup")
     sub.add_parser("verify")
     a = ap.parse_args()
