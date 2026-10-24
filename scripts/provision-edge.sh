@@ -17,6 +17,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# mise exec を付けずに呼ばれても、mise.toml の terraform を使う
+if command -v mise >/dev/null 2>&1; then
+  eval "$(mise -C "$ROOT" env -s bash)"
+fi
 OUT_BASE="${OUT_BASE:-$ROOT/edge/.certs}"
 INFRA_DIR="${INFRA_DIR:-$ROOT/infra}"
 ROOT_CA_URL="https://www.amazontrust.com/repository/AmazonRootCA1.pem"
