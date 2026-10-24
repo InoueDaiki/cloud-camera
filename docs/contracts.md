@@ -28,6 +28,7 @@
 | `infra/` | Terraform | HCL |
 | `viewer/` | ビューワー | React + TypeScript + Vite |
 | `scripts/` | ビルド、デプロイ、検証の補助スクリプト | bash / Python |
+| `tools/cost/` | コスト計測(単価表、実測の収集、机上計算、レポート)。リソース名はこのファイルの命名規則から導く | Python |
 
 各 Lambda ディレクトリは `build.sh` を持ち、`build/<name>.zip` を出力する(Terraform はこの zip を参照する)。
 依存は `pip install --platform manylinux2014_aarch64 --only-binary=:all: --python-version 3.13` 等で arm64 用を入れる。
