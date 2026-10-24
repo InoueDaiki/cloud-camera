@@ -1,4 +1,4 @@
-"""ONVIF の Device / Media(ver10)/ Media2(ver20)サービス。
+"""ONVIF の Device / Media(ver10)/ Media2(ver20)/ PTZ(ver20)サービス。
 
 1 台のカメラにつき 1 つの CameraServices を作る。レスポンスは手書きの XML テンプレートで返す。
 要素の順序は ONVIF のスキーマ(onvif.xsd、各 WSDL)の sequence どおりにしている(zeep は順序に厳しい)。
@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .config import CameraConfig, EmulatorConfig, StreamSettings
+from .ptz import PtzController
+from .ptz_service import PtzServiceMixin, ptz_capabilities_xml, ptz_configuration_xml
 from .soap import (
     NS,
     SoapFault,
@@ -57,18 +59,20 @@ class RequestContext:
     local_ip: str  # このコンテナの IP(GetNetworkInterfaces 用)
 
 
-class CameraServices:
+class CameraServices(PtzServiceMixin):
     def __init__(
         self,
         cfg: EmulatorConfig,
         cam: CameraConfig,
         on_encoder_change: Callable[[CameraConfig, str], Any] | None = None,
+        ptz: PtzController | None = None,
     ):
         self.cfg = cfg
         self.cam = cam
         self.on_encoder_change = on_encoder_change
+        self.ptz = ptz  # None なら PTZ なし(GetServices などに載せない)
         self._handlers: dict[tuple[str, str], Callable[[SoapRequest, RequestContext], str]] = {}
-        for ns_key, prefix in (("tds", "dev_"), ("trt", "m1_"), ("tr2", "m2_")):
+        for ns_key, prefix in (("tds", "dev_"), ("trt", "m1_"), ("tr2", "m2_"), ("tptz", "ptz_")):
             for name in dir(self):
                 if name.startswith(prefix):
                     self._handlers[(NS[ns_key], name[len(prefix) :])] = getattr(self, name)
@@ -183,11 +187,13 @@ class CameraServices:
 
     def _profile1_xml(self, which: str) -> str:
         enc = self._encoder1_xml("tt:VideoEncoderConfiguration", which) if which == "sub" else ""
+        # main と sub は同じ切り出し窓なので、同じ PTZConfiguration を付ける
+        ptz = ptz_configuration_xml("tt:PTZConfiguration") if self.ptz else ""
         return (
             f'<trt:Profiles token="{PROFILE_TOKEN[which]}" fixed="true">'
             f"<tt:Name>{which}</tt:Name>"
             f"{self._video_source_config_xml('tt:VideoSourceConfiguration')}"
-            f"{enc}</trt:Profiles>"
+            f"{enc}{ptz}</trt:Profiles>"
         )
 
     def _profile2_xml(self, which: str, types: set[str]) -> str:
@@ -198,6 +204,8 @@ class CameraServices:
                 parts.append(self._video_source_config_xml("tr2:VideoSource"))
             if "All" in types or "VideoEncoder" in types:
                 parts.append(self._encoder2_xml("tr2:VideoEncoder", which))
+            if self.ptz and ("All" in types or "PTZ" in types):
+                parts.append(ptz_configuration_xml("tr2:PTZ"))
             conf = f"<tr2:Configurations>{''.join(parts)}</tr2:Configurations>"
         return (
             f'<tr2:Profiles token="{PROFILE_TOKEN[which]}" fixed="true">'
@@ -315,6 +323,8 @@ class CameraServices:
                 "<tt:RTP_TCP>true</tt:RTP_TCP><tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP>"
                 "</tt:StreamingCapabilities></tt:Media>"
             )
+        if want("PTZ") and self.ptz:
+            parts.append(f"<tt:PTZ><tt:XAddr>{self._xaddr(ctx, 'ptz_service')}</tt:XAddr></tt:PTZ>")
         if not parts:
             raise SoapFault("Receiver", ["ter:ActionNotSupported", "ter:NoSuchService"], "No such service")
         return f"<tds:GetCapabilitiesResponse><tds:Capabilities>{''.join(parts)}</tds:Capabilities></tds:GetCapabilitiesResponse>"
@@ -344,10 +354,11 @@ class CameraServices:
         )
 
     def _media2_caps(self) -> str:
+        supported = "VideoSource VideoEncoder PTZ" if self.ptz else "VideoSource VideoEncoder"
         return (
             '<tr2:Capabilities SnapshotUri="true" Rotation="false" VideoSourceMode="false" OSD="false" '
             'TemporaryOSDText="false" Mask="false" SourceMask="false">'
-            '<tr2:ProfileCapabilities MaximumNumberOfProfiles="2" ConfigurationsSupported="VideoSource VideoEncoder"/>'
+            f'<tr2:ProfileCapabilities MaximumNumberOfProfiles="2" ConfigurationsSupported="{supported}"/>'
             '<tr2:StreamingCapabilities RTSPStreaming="true" RTPMulticast="false" RTP_RTSP_TCP="true" '
             'NonAggregateControl="false" AutoStartMulticast="false"/>'
             "</tr2:Capabilities>"
@@ -360,6 +371,8 @@ class CameraServices:
             (NS["trt"], "media_service", self._media1_caps(), (2, 60)),
             (NS["tr2"], "media2_service", self._media2_caps(), (17, 6)),
         ]
+        if self.ptz:
+            services.append((NS["tptz"], "ptz_service", ptz_capabilities_xml(), (2, 60)))
         out = []
         for ns, path, caps, (major, minor) in services:
             cap = f"<tds:Capabilities>{caps}</tds:Capabilities>" if include else ""

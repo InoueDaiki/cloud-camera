@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# テスト用の Media2 WSDL 一式を tests/wsdl/ に用意する(リポジトリには生成済みのものをコミットしている)。
+# テスト用の Media2 / PTZ WSDL 一式を tests/wsdl/ に用意する(リポジトリには生成済みのものをコミットしている)。
 #
 # onvif-zeep に同梱の WSDL は古く(スキーマ 2.4 系)、Media2(ver20/media)が含まれないため、
 # ONVIF 公式(github.com/onvif/specs)の media2 WSDL と onvif.xsd を取り込み、
@@ -11,8 +11,10 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$HERE/tests/wsdl"
 BASE="https://raw.githubusercontent.com/onvif/specs/${SPECS_TAG}/wsdl"
 
-mkdir -p "$OUT/ver20/media/wsdl" "$OUT/ver10/schema/ext"
+mkdir -p "$OUT/ver20/media/wsdl" "$OUT/ver20/ptz/wsdl" "$OUT/ver10/schema/ext"
 curl -fsSL -o "$OUT/ver20/media/wsdl/media.wsdl" "$BASE/ver20/media/wsdl/media.wsdl"
+# PTZ は onvif-zeep にも同梱されているが古いスキーマなので、strict な検証には公式の最新を使う
+curl -fsSL -o "$OUT/ver20/ptz/wsdl/ptz.wsdl" "$BASE/ver20/ptz/wsdl/ptz.wsdl"
 curl -fsSL -o "$OUT/ver10/schema/onvif.xsd" "$BASE/ver10/schema/onvif.xsd"
 curl -fsSL -o "$OUT/ver10/schema/common.xsd" "$BASE/ver10/schema/common.xsd"
 

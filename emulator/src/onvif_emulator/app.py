@@ -10,6 +10,7 @@ from aiohttp import web
 
 from .config import CameraConfig, EmulatorConfig
 from .discovery import DiscoveryServer
+from .ptz import PtzController
 from .services import CameraServices, RequestContext
 from .soap import NS, SoapFault, content_type, envelope, fault_envelope, parse_request
 from .streams import ffmpeg_command, snapshot_path, write_mediamtx_config, write_overlay_text
@@ -30,9 +31,14 @@ def _request_host(request: web.Request, cfg: EmulatorConfig) -> str:
 class Emulator:
     def __init__(self, cfg: EmulatorConfig):
         self.cfg = cfg
-        self.services = {cam.index: CameraServices(cfg, cam, self._on_encoder_change) for cam in cfg.cameras}
+        # 疑似 PTZ の状態はカメラごと(メモリ上だけ)
+        self.ptz = {cam.index: PtzController(cam.ptz) for cam in cfg.cameras if cam.ptz.enabled}
+        self.services = {
+            cam.index: CameraServices(cfg, cam, self._on_encoder_change, self.ptz.get(cam.index)) for cam in cfg.cameras
+        }
         self.mediamtx: ManagedProcess | None = None
         self.ffmpeg: dict[int, ManagedProcess] = {}
+        self.ptz_links: dict = {}  # index → PtzVideoLink(映像を出すときだけ)
         self.discovery: DiscoveryServer | None = None
         self.runners: list[web.AppRunner] = []
 
@@ -83,6 +89,19 @@ class Emulator:
         cams = {}
         for cam in self.cfg.cameras:
             p = self.ffmpeg.get(cam.index)
+            ptz = self.ptz.get(cam.index)
+            link = self.ptz_links.get(cam.index)
+            ptz_status = None
+            if ptz is not None:
+                pan, tilt, zoom = ptz.position()
+                ptz_status = {
+                    "pan": round(pan, 4), "tilt": round(tilt, 4), "zoom": round(zoom, 4),
+                    "magnification": round(ptz.magnification(), 3),
+                    "moving": ptz.any_moving,
+                    "presets": len(ptz.presets),
+                    "commands_sent": link.commands_sent if link else 0,
+                    "command_errors": link.command_errors if link else 0,
+                }
             cams[cam.name] = {
                 "path": cam.path_prefix,
                 "onvif_port": cam.onvif_port,
@@ -94,6 +113,7 @@ class Emulator:
                 "frame": p.progress.get("frame") if p else None,
                 "fps": p.progress.get("fps") if p else None,
                 "speed": p.progress.get("speed") if p else None,
+                "ptz": ptz_status,
             }
         return {
             "streams_enabled": self.cfg.streams_enabled,
@@ -114,21 +134,34 @@ class Emulator:
         self.mediamtx = ManagedProcess("mediamtx", lambda: [cfg.mediamtx_bin, str(mtx_conf)])
         self.mediamtx.start()
         for cam in cfg.cameras:
+            link = None
+            if cam.index in self.ptz:
+                from .ptz_link import PtzVideoLink  # pyzmq は映像を出すときだけ使う
 
-            async def prepare(cam=cam) -> None:
-                write_overlay_text(cfg, cam)
+                link = PtzVideoLink(cfg, cam, self.ptz[cam.index])
+                self.ptz_links[cam.index] = link
+
+            async def prepare(cam=cam, link=link) -> None:
+                write_overlay_text(cfg, cam, link.overlay_line() if link else None)
                 if not await wait_tcp("127.0.0.1", cfg.rtsp_port, timeout=30):
                     raise RuntimeError("MediaMTX の RTSP ポートが開きません")
 
+            def argv(cam=cam) -> list[str]:
+                # 再起動しても今の切り出し窓から始める
+                ptz = self.ptz.get(cam.index)
+                return ffmpeg_command(cfg, cam, ptz.window() if ptz else None)
+
             p = ManagedProcess(
                 f"ffmpeg-{cam.path_prefix}",
-                lambda cam=cam: ffmpeg_command(cfg, cam),
+                argv,
                 watchdog_s=20,
                 progress_marker=b"progress=",
                 before_start=prepare,
             )
             self.ffmpeg[cam.index] = p
             p.start()
+            if link is not None:
+                link.start()
 
     # ---- 起動・停止 ----
 
@@ -153,6 +186,7 @@ class Emulator:
     async def stop(self) -> None:
         if self.discovery:
             self.discovery.stop()
+        await asyncio.gather(*(link.stop() for link in self.ptz_links.values()), return_exceptions=True)
         await asyncio.gather(*(p.stop() for p in self.ffmpeg.values()), return_exceptions=True)
         if self.mediamtx:
             await self.mediamtx.stop()

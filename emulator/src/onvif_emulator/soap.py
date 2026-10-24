@@ -18,6 +18,7 @@ NS = {
     "tds": "http://www.onvif.org/ver10/device/wsdl",
     "trt": "http://www.onvif.org/ver10/media/wsdl",
     "tr2": "http://www.onvif.org/ver20/media/wsdl",
+    "tptz": "http://www.onvif.org/ver20/ptz/wsdl",
     "ter": "http://www.onvif.org/ver10/error",
     "wsse": "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd",
     "wsu": "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd",

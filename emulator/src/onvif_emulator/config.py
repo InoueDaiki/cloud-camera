@@ -46,6 +46,17 @@ class StreamSettings:
 
 
 @dataclass
+class PtzSettings:
+    """疑似 PTZ(元映像の切り出し)の設定。カメラごと。"""
+
+    enabled: bool = True
+    max_zoom: float = 4.0  # zoom = 1 のときの倍率(倍率 = 1 + zoom × (max_zoom − 1))
+    pan_tilt_speed: float = 0.5  # 速度 1(最大)のときの pan / tilt の速さ(Generic 空間の単位 / 秒)
+    zoom_speed: float = 0.5  # 速度 1 のときの zoom の速さ(単位 / 秒。0→1 に 2 秒)
+    source_scale: float = 2.0  # テストパターンの元映像を main の何倍の解像度で作るか(動画ファイルは元の解像度)
+
+
+@dataclass
 class CameraConfig:
     index: int  # 1 始まり。RTSP パス cam{index}/... と ONVIF ポートに使う
     name: str
@@ -62,6 +73,7 @@ class CameraConfig:
     hardware_id: str
     location: str
     preset: str  # x264/x265 の preset
+    ptz: PtzSettings = field(default_factory=PtzSettings)
 
     @property
     def path_prefix(self) -> str:
@@ -120,6 +132,11 @@ CAMERA_DEFAULTS: dict[str, Any] = {
     "model": "ONVIF-Emulator",
     "firmware": "0.1.0",
     "location": "emulator",
+    "ptz": True,
+    "ptz_max_zoom": 4.0,
+    "ptz_pan_tilt_speed": 0.5,
+    "ptz_zoom_speed": 0.5,
+    "ptz_source_scale": 2.0,
 }
 
 # 環境変数名の接尾辞 → 設定キーと型
@@ -143,6 +160,11 @@ _CAMERA_ENV_KEYS: dict[str, tuple[str, type]] = {
     "FIRMWARE": ("firmware", str),
     "LOCATION": ("location", str),
     "ONVIF_PORT": ("onvif_port", int),
+    "PTZ": ("ptz", bool),
+    "PTZ_MAX_ZOOM": ("ptz_max_zoom", float),
+    "PTZ_PAN_TILT_SPEED": ("ptz_pan_tilt_speed", float),
+    "PTZ_ZOOM_SPEED": ("ptz_zoom_speed", float),
+    "PTZ_SOURCE_SCALE": ("ptz_source_scale", float),
 }
 
 _GLOBAL_ENV_KEYS: dict[str, tuple[str, type]] = {
@@ -201,6 +223,19 @@ def _build_camera(index: int, values: dict[str, Any], base_port: int) -> CameraC
     if not source.startswith("file:") and source not in TEST_SOURCES:
         raise ValueError(f"{name}: 不明な映像ソース {source!r}({sorted(TEST_SOURCES)} か file:/path)")
     serial = hashlib.sha1(name.encode()).hexdigest()[:12].upper()
+    ptz = PtzSettings(
+        enabled=_to_bool(v["ptz"]),
+        max_zoom=float(v["ptz_max_zoom"]),
+        pan_tilt_speed=float(v["ptz_pan_tilt_speed"]),
+        zoom_speed=float(v["ptz_zoom_speed"]),
+        source_scale=float(v["ptz_source_scale"]),
+    )
+    if not 1.0 <= ptz.max_zoom <= 16.0:
+        raise ValueError(f"{name}: ptz_max_zoom は 1〜16 にしてください({ptz.max_zoom})")
+    if ptz.pan_tilt_speed <= 0 or ptz.zoom_speed <= 0:
+        raise ValueError(f"{name}: PTZ の速度は正の値にしてください")
+    if not 1.0 <= ptz.source_scale <= 4.0:
+        raise ValueError(f"{name}: ptz_source_scale は 1〜4 にしてください({ptz.source_scale})")
     return CameraConfig(
         index=index,
         name=name,
@@ -233,6 +268,7 @@ def _build_camera(index: int, values: dict[str, Any], base_port: int) -> CameraC
         hardware_id=str(v.get("hardware_id") or f"EMU-{index}"),
         location=str(v["location"]),
         preset=str(v["preset"]),
+        ptz=ptz,
     )
 
 

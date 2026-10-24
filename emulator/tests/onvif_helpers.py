@@ -14,6 +14,8 @@ from wsdiscovery.discovery import ThreadedWSDiscovery
 
 MEDIA2_NS = "http://www.onvif.org/ver20/media/wsdl"
 MEDIA2_WSDL = str(WSDL_DIR / "ver20/media/wsdl/media.wsdl")
+PTZ_NS = "http://www.onvif.org/ver20/ptz/wsdl"
+PTZ_WSDL = str(WSDL_DIR / "ver20/ptz/wsdl/ptz.wsdl")  # 公式(26.06)。onvif-zeep 同梱の ptz.wsdl は古いスキーマ
 
 
 PROBE = """<?xml version="1.0" encoding="UTF-8"?>
@@ -104,6 +106,33 @@ def media2(cam: ONVIFCamera, user: str, password: str, *, digest: bool = True) -
         dt_diff=cam.dt_diff,
         binding_name=f"{{{MEDIA2_NS}}}Media2Binding",
     )
+
+
+def ptz_status(ptz) -> tuple[float, float, float, str, str]:
+    """onvif-zeep の GetStatus → (pan, tilt, zoom, PanTilt の MoveStatus, Zoom の MoveStatus)。"""
+    st = ptz.GetStatus({"ProfileToken": "Profile_Main"})
+    p = st.Position
+    return (p.PanTilt.x, p.PanTilt.y, p.Zoom.x, st.MoveStatus.PanTilt, st.MoveStatus.Zoom)
+
+
+def ptz_wait_idle(ptz, timeout: float = 15.0) -> tuple[float, float, float, str, str]:
+    def idle():
+        s = ptz_status(ptz)
+        return s if s[3] == "IDLE" and s[4] == "IDLE" else None
+
+    st = wait_until(idle, timeout, 0.1)
+    assert st, "PTZ が止まらない"
+    return st
+
+
+def ptz_reset(ptz) -> None:
+    """位置を (0, 0, 0) に戻し、プリセットとホームを消す(テストの後始末)。"""
+    ptz.Stop({"ProfileToken": "Profile_Main"})
+    ptz.AbsoluteMove({"ProfileToken": "Profile_Main", "Position": {"PanTilt": {"x": 0, "y": 0}, "Zoom": {"x": 0}}})
+    ptz_wait_idle(ptz)
+    ptz.SetHomePosition({"ProfileToken": "Profile_Main"})
+    for p in ptz.GetPresets({"ProfileToken": "Profile_Main"}) or []:
+        ptz.RemovePreset({"ProfileToken": "Profile_Main", "PresetToken": p.token})
 
 
 def wait_until(pred, timeout: float, interval: float = 0.5):
