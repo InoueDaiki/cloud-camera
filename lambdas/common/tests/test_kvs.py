@@ -200,3 +200,33 @@ def test_get_images_pages_and_decodes(monkeypatch):
 def test_minute_ready_is_deprecated_and_always_ready():
     # 互換のための残骸。判定は run_pipeline のウォーターマークが行う
     assert kvs.minute_ready("s", T(10, 21), T(10, 21, 1), quiet_seconds=30, max_wait_seconds=600) == (True, "watermark")
+
+
+def test_endpoint_export_import(monkeypatch):
+    """別の実行環境の起動が保存したエンドポイントを使い、GetDataEndpoint を呼ばない。"""
+    _stub_endpoint(monkeypatch, ["https://a.example.com"])
+    assert kvs.get_data_endpoint("s1", kvs.LIST_FRAGMENTS) == "https://a.example.com"
+    saved = kvs.export_endpoints("s1")
+    assert list(saved) == [kvs.LIST_FRAGMENTS]
+    assert saved[kvs.LIST_FRAGMENTS][0] == "https://a.example.com"
+    assert kvs.export_endpoints("other") == {}
+
+    kvs.clear_cache()  # 別の実行環境に見立てる
+    st = _stub_endpoint(monkeypatch, [])  # 呼ばれたら Stubber の応答切れで失敗する
+    kvs.import_endpoints("s1", saved)
+    assert kvs.get_data_endpoint("s1", kvs.LIST_FRAGMENTS) == "https://a.example.com"
+    st.assert_no_pending_responses()
+
+
+def test_endpoint_import_ignores_expired_and_garbage(monkeypatch):
+    st = _stub_endpoint(monkeypatch, ["https://fresh.example.com"])
+    old = kvs.time.time() - kvs.ENDPOINT_TTL_SECONDS - 1
+    kvs.import_endpoints("s1", {kvs.LIST_FRAGMENTS: ["https://old.example.com", old],
+                                kvs.GET_IMAGES: "broken", kvs.GET_CLIP: ["http://plain.example.com", kvs.time.time()]})
+    kvs.import_endpoints("s1", None)
+    assert kvs.export_endpoints("s1") == {}
+    assert kvs.get_data_endpoint("s1", kvs.LIST_FRAGMENTS) == "https://fresh.example.com"
+    st.assert_no_pending_responses()
+    # 手元の方が新しければ上書きしない
+    kvs.import_endpoints("s1", {kvs.LIST_FRAGMENTS: ["https://older.example.com", kvs.time.time() - 10]})
+    assert kvs.get_data_endpoint("s1", kvs.LIST_FRAGMENTS) == "https://fresh.example.com"

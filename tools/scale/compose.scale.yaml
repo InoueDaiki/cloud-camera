@@ -1,0 +1,38 @@
+# スケール検証用: エミュレーター 10 台 + エッジ 1 台(10 カメラ)。ホストのポートは公開しない(docs/scale.md)
+#   docker compose -f tools/scale/compose.scale.yaml up -d --build
+name: cc-tmp-scale
+
+services:
+  emulator:
+    build:
+      context: ../../emulator
+      target: base
+    image: cc-tmp-scale-emulator:dev
+    environment:
+      EMULATOR_CAMERAS: "10"
+      EMULATOR_WIDTH: "960"
+      EMULATOR_HEIGHT: "540"
+      EMULATOR_FPS: "15"
+      EMULATOR_BITRATE_KBPS: "768"
+      EMULATOR_SOURCE: testsrc
+      EMULATOR_DISCOVERY: "false"
+    restart: unless-stopped
+
+  edge:
+    build:
+      context: ../../edge
+    image: cc-tmp-scale-edge:dev
+    depends_on:
+      emulator:
+        condition: service_healthy
+    environment:
+      CC_PROJECT: cc-tmp-scale
+      CC_GATEWAY_ID: gw-001
+      CC_SINK: kvs
+      CC_USE_SHADOW: "true"
+      CC_CONFIG_FILE: /certs/config.json
+      CC_LOG_LEVEL: INFO
+    volumes:
+      - ../../edge/.certs/gw-001:/certs:ro
+    stop_grace_period: 30s
+    restart: unless-stopped

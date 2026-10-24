@@ -1,6 +1,7 @@
 """KVS の読み出し系 API のヘルパー(動画の退避と物体検出で共用)。
 
-- GetDataEndpoint の結果をプロセス内でキャッシュする(ウォームスタートで使い回す)。
+- GetDataEndpoint の結果をプロセス内でキャッシュする(ウォームスタートで使い回す)。run_pipeline は処理済み位置の件にも保存し、
+  別の実行環境の起動でも使い回す(export_endpoints / import_endpoints)。
 - ListFragments / GetImages のページ送りをまとめる。同じ ProducerTimestamp の断片(再送の重複)は 1 つにする。
 - ListFragments の結果から録画範囲(segments)とウォーターマークを作る。
 """
@@ -31,7 +32,8 @@ ENDPOINT_TTL_SECONDS = 3600
 _BOTO_CONFIG = Config(retries={"max_attempts": 5, "mode": "standard"}, connect_timeout=5, read_timeout=30)
 
 _lock = threading.Lock()
-_endpoints: dict[tuple[str, str], tuple[str, float]] = {}
+# (ストリーム, APIName) → (エンドポイント, 取得時刻 monotonic, 取得時刻 epoch 秒)
+_endpoints: dict[tuple[str, str], tuple[str, float, float]] = {}
 _clients: dict[str, Any] = {}
 _kv_client: Any = None
 
@@ -60,8 +62,45 @@ def get_data_endpoint(stream_name: str, api_name: str) -> str:
             return hit[0]
     ep = _kinesisvideo().get_data_endpoint(StreamName=stream_name, APIName=api_name)["DataEndpoint"]
     with _lock:
-        _endpoints[key] = (ep, now)
+        _endpoints[key] = (ep, now, time.time())
     return ep
+
+
+def export_endpoints(stream_name: str) -> dict[str, list]:
+    """ストリームのキャッシュ済みエンドポイントを `{APIName: [endpoint, 取得時刻(epoch 秒)]}` で返す(期限内のものだけ)。
+
+    run_pipeline が処理済み位置の件(`kvs_endpoints`)に保存し、次の起動(別の実行環境でも)で import_endpoints する。
+    台数が多いと 1 つの実行環境が同じカメラを担当する確率が下がり、プロセス内のキャッシュが効かなくなるため
+    (GetDataEndpoint はアカウントあたり 300 TPS が上限。docs/scale.md)。
+    """
+    now = time.monotonic()
+    with _lock:
+        return {
+            api: [ep, int(wall)]
+            for (s, api), (ep, mono, wall) in _endpoints.items()
+            if s == stream_name and now - mono < ENDPOINT_TTL_SECONDS
+        }
+
+
+def import_endpoints(stream_name: str, data: Any) -> None:
+    """export_endpoints の形の値をキャッシュに入れる。期限切れ、形の違うもの、手元の方が新しいものは無視する。"""
+    if not isinstance(data, dict):
+        return
+    now_mono, now_wall = time.monotonic(), time.time()
+    with _lock:
+        for api, v in data.items():
+            try:
+                ep, fetched = str(v[0]), float(v[1])
+            except (TypeError, ValueError, IndexError, KeyError):
+                continue
+            age = now_wall - fetched
+            if not ep.startswith("https://") or age < 0 or age >= ENDPOINT_TTL_SECONDS:
+                continue
+            key = (stream_name, str(api))
+            cur = _endpoints.get(key)
+            if cur is not None and cur[2] >= fetched:
+                continue
+            _endpoints[key] = (ep, now_mono - age, fetched)
 
 
 def invalidate_endpoint(stream_name: str, api_name: str | None = None) -> None:

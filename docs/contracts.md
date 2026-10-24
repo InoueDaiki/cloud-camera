@@ -72,6 +72,7 @@ PK `camera_id`(S)、SK `sk`(S)。TTL 属性 `expires_at`(数値、epoch 秒)。
 | `processed_until` | S | `2026-10-24T10:25:00Z` |
 | `lease_until` | S | `2026-10-24T10:27:00Z`。リースは `lease_until < 現在時刻` の条件付き更新で取る |
 | `lease_owner` | S | Lambda のリクエスト ID |
+| `kvs_endpoints` | M | 任意。KVS のデータエンドポイントのキャッシュ `{"LIST_FRAGMENTS": ["https://...", 取得時刻(epoch 秒)], ...}`。共通処理がリースの解放と一緒に書き、次の起動が 1 時間以内なら使う(GetDataEndpoint の 300 TPS 対策。docs/scale.md) |
 
 カーソルが存在しないときは「現在時刻 − lag」を 1 分境界に切り捨てた時刻 − 5 分 から始める。
 `processed_until` より前の区間はすべて確定済み(下の「区間を処理してよい条件」を満たしてから確定する)。
@@ -118,7 +119,7 @@ def run_pipeline(kind: Literal["VIDEO", "DETECT"], camera_id: str,
 満たさなければ止めて次の起動を待つ(試行回数に数えない)。前提はエッジ(kvssink)が断片を時刻順に送り、回線断のあとは未 ACK の分を古い順に送り直すこと。
 区間は 1 回だけ処理し、再処理はしない(「処理済み位置より前はすべて確定」は維持)。構想.md の「1回の起動での流れ」との差は、2. と 3. の間にこの判定が入ること。
 - 限界: `MAX_LATE_SECONDS` より後に届いた断片は捨てる(エッジ側でも捨てられている量)。配信停止中やオフライン中は、処理済み位置が現在より約 `MAX_LATE_SECONDS` 遅れる(その範囲はビューワーが KVS から再生する)
-- ListFragments は、処理する区間がある起動ごとに 1 回(カーソル 〜 現在)。結果を起動の間キャッシュし、`common.kvs.list_fragments` はそこから返す
+- ListFragments は、処理する区間がある起動ごとに 1 回(カーソル 〜 現在)。結果を起動の間キャッシュし、`common.kvs.list_fragments` はそこから返す。上流を待つ物体検出は、ウォーターマークが要る区間(上流が確定させていない区間)に来たときだけ呼ぶ(通常は 0 回)
 - 再送による重複: 同じ ProducerTimestamp の断片が KVS に 2 つ入りうる。`common.kvs.list_fragments` が ProducerTimestamp で重複を除き、clip、`segments`、`fragment_count`、GetImages の時刻はその結果に揃える
 - `common.kvs.minute_ready` は廃止(互換のため常に `(True, "watermark")` を返す。「何も届いていない = 送信が止まった」とみなして進むため、回線断のあとの断片を取りこぼした)
 **物体検出は動画の退避を待つ(上流)**: 物体検出は動画の退避が置いた `clip.mp4` を読むので、`run_pipeline(..., upstream_kind="VIDEO")` で動かす。

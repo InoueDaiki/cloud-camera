@@ -1,0 +1,197 @@
+{
+ "label": "baseline-rate-off",
+ "start": "2026-10-24T05:40:00+00:00",
+ "end": "2026-10-24T06:00:00+00:00",
+ "functions": {
+  "video-archiver": {
+   "invocations": 200,
+   "cold_starts": 2,
+   "init_ms_p50": 295.18,
+   "dur_ms": {
+    "p50": 2361.46,
+    "p90": 2513.11,
+    "p99": 2994.2,
+    "max": 4475.24,
+    "mean": 2361.3119
+   },
+   "max_mem_mb": 183,
+   "start_second_hist_5s": {
+    "0": 20,
+    "10": 20,
+    "15": 20,
+    "30": 20,
+    "35": 40,
+    "40": 60,
+    "50": 20
+   },
+   "stopped": {
+    "caught_up": 199,
+    "retry": 1
+   },
+   "minutes_per_invocation": {
+    "1": 199,
+    "0": 1
+   }
+  },
+  "detector": {
+   "invocations": 200,
+   "cold_starts": 0,
+   "init_ms_p50": null,
+   "dur_ms": {
+    "p50": 12440.12,
+    "p90": 12536.62,
+    "p99": 12611.98,
+    "max": 12644.83,
+    "mean": 11748.41385
+   },
+   "max_mem_mb": 533,
+   "start_second_hist_5s": {
+    "0": 20,
+    "5": 60,
+    "15": 40,
+    "20": 20,
+    "50": 20,
+    "55": 40
+   },
+   "stopped": {
+    "waiting_upstream": 159,
+    "caught_up": 41
+   },
+   "minutes_per_invocation": {
+    "1": 199,
+    "0": 1
+   }
+  }
+ },
+ "concurrency_per_second": {
+  "max": 6,
+  "p99": 6,
+  "p90": 5,
+  "mean": 2.6783333333333332,
+  "max_video": 3,
+  "max_detect": 6
+ },
+ "mean_concurrency_by_second_of_minute": {
+  "0": 3.0,
+  "1": 3.0,
+  "2": 5.0,
+  "3": 5.0,
+  "4": 5.0,
+  "5": 3.95,
+  "6": 4.95,
+  "7": 4.9,
+  "8": 5.75,
+  "9": 4.65,
+  "10": 4.65,
+  "11": 4.65,
+  "12": 4.3,
+  "13": 3.6,
+  "14": 4.6,
+  "15": 5.6,
+  "16": 4.65,
+  "17": 4.0,
+  "18": 3.3,
+  "19": 5.25,
+  "20": 4.85,
+  "21": 4.7,
+  "22": 3.0,
+  "23": 3.0,
+  "24": 3.0,
+  "25": 2.7,
+  "26": 2.7,
+  "27": 2.7,
+  "28": 2.1,
+  "29": 1.95,
+  "30": 1.95,
+  "31": 1.95,
+  "32": 1.0,
+  "33": 1.0,
+  "34": 1.0,
+  "35": 2.0,
+  "36": 1.95,
+  "37": 1.95,
+  "38": 1.1,
+  "39": 1.05,
+  "40": 2.2,
+  "41": 3.0,
+  "42": 3.0,
+  "43": 1.05,
+  "44": 0.95,
+  "45": 0.05,
+  "46": 0.05,
+  "47": 0.0,
+  "48": 0.0,
+  "49": 0.0,
+  "50": 0.0,
+  "51": 0.0,
+  "52": 1.0,
+  "53": 1.0,
+  "54": 1.95,
+  "55": 2.45,
+  "56": 1.9,
+  "57": 1.9,
+  "58": 1.9,
+  "59": 2.85
+ },
+ "cloudwatch": {
+  "video-archiver": {
+   "Invocations": 199.0,
+   "Errors": 0.0,
+   "Throttles": 0.0,
+   "ConcurrentExecutions_max": 3.0,
+   "AsyncEventAge_max_ms": 89.0,
+   "AsyncEventsDropped": 0.0
+  },
+  "detector": {
+   "Invocations": 198.0,
+   "Errors": 0.0,
+   "Throttles": 0.0,
+   "ConcurrentExecutions_max": 5.0,
+   "AsyncEventAge_max_ms": 102.0,
+   "AsyncEventsDropped": 0.0
+  },
+  "api": {
+   "Invocations": 0,
+   "Errors": 0,
+   "Throttles": 0,
+   "ConcurrentExecutions_max": null,
+   "AsyncEventAge_max_ms": null,
+   "AsyncEventsDropped": 0
+  },
+  "account_ConcurrentExecutions_max": 6.0,
+  "account_Throttles": 0.0,
+  "scheduler_InvocationAttemptCount": 399.0,
+  "scheduler_TargetErrorCount": 0,
+  "scheduler_TargetErrorThrottledCount": 0,
+  "scheduler_InvocationThrottleCount": 0,
+  "scheduler_InvocationDroppedCount": 0,
+  "scheduler_InvocationsFailedToBeSentToDeadLetterCount": 0,
+  "kvs_total": {
+   "ListFragments.Requests": 399.0,
+   "ListFragments.Success": 399.0,
+   "GetHLSStreamingSessionURL.Requests": 199.0,
+   "GetHLSStreamingSessionURL.Success": 199.0,
+   "GetHLSMediaPlaylist.Requests": 199.0,
+   "GetHLSMediaPlaylist.Success": 199.0,
+   "GetHLSMasterPlaylist.Requests": 199.0,
+   "GetHLSMasterPlaylist.Success": 199.0,
+   "GetMP4InitFragment.Requests": 199.0,
+   "GetMP4InitFragment.Success": 199.0,
+   "GetMP4MediaFragment.Requests": 11939.0,
+   "GetMP4MediaFragment.Success": 11939.0,
+   "GetImages.Requests": 0.0,
+   "GetImages.Success": 0.0,
+   "PutMedia.Requests": 0.0,
+   "PutMedia.Success": 11977.0,
+   "PutMedia.IncomingBytes": 556930410.0,
+   "PutMedia.ConnectionErrors": 0.0
+  },
+  "dynamodb": {
+   "ConsumedWCU": 2589.0,
+   "ConsumedRCU": 748.0,
+   "WriteThrottleEvents": 0,
+   "ReadThrottleEvents": 0
+  }
+ },
+ "minutes": 20.0
+}

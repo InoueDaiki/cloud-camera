@@ -77,6 +77,8 @@ def lambda_handler(event, context):
 (断片 1,000 本ごとに 1 ページ。1 秒の断片なら約 16 分ぶんまで 1 回)。結果は起動の間だけキャッシュし、
 `process_minute` の中の `kvs.list_fragments(stream, start, end)` はそこから返る(API を呼ばない)。
 追いついていて処理する区間がない起動では呼ばない。
+上流を待つ処理(物体検出)は、上流が確定させた区間にはウォーターマークが要らないので、**ウォーターマークが要る区間に来たときだけ** 呼ぶ
+(通常は 0 回。上流が止まって `upstream_max_wait` を過ぎたときなど)。1 台・1 分あたりの ListFragments は 2 回 → 1 回(実測、docs/scale.md)。
 以前(`minute_ready` を使っていたとき)の動画退避は 1 区間あたり ListFragments 2 回(サーバー時刻 1 回 + プロデューサー時刻 1 回)だったので、
 通常時(1 起動 = 1 区間)は 2 回 → 1 回に減り、追いつくとき(1 起動 = n 区間)は 2n 回 → 1 回になる。物体検出も一覧はキャッシュから返る。
 KVS の料金表にはリクエスト単位の項目がなく(取り出しは GB 単位)、ListFragments の呼び出しによる追加の費用はない見込み。
@@ -153,6 +155,7 @@ clip の連結、`segments`、`fragment_count` はこの一覧から作る。`kv
 | --- | --- |
 | `stream_name_for(camera_id)` | `STREAM_NAME_PREFIX` + カメラ ID |
 | `get_data_endpoint(stream, api)` | GetDataEndpoint をプロセス内で 1 時間キャッシュ |
+| `export_endpoints(stream)` / `import_endpoints(stream, data)` | キャッシュ済みのエンドポイントを `{APIName: [endpoint, 取得時刻(epoch 秒)]}` で出し入れする。run_pipeline が処理済み位置の件の `kvs_endpoints` に保存し、次の起動(別の実行環境でも)で読み込む(下の「GetDataEndpoint の呼び出し」) |
 | `archived_media_client(stream, api)` | データエンドポイント向けの `kinesis-video-archived-media` クライアント(キャッシュ) |
 | `list_fragments(stream, start, end)` | ListFragments(プロデューサー時刻)をページ送りし、**開始時刻が `[start, end)`** の断片を時刻順に返す。同じ ProducerTimestamp の重複は 1 つにする。run_pipeline のキャッシュに収まる範囲は API を呼ばない |
 | `effective_durations(fragments, gap_ms=500)` | 断片の実際の長さ。`FragmentLengthInMilliseconds` は最後の 1 フレーム分短い(実測)ので、次の断片の開始までを長さとする |
@@ -160,6 +163,14 @@ clip の連結、`segments`、`fragment_count` はこの一覧から作る。`kv
 | `dedupe_fragments(fragments)` / `watermark_ms(fragments)` | 同じ ProducerTimestamp の重複を除く / ウォーターマーク(最新の断片の終わり、epoch ミリ秒) |
 | `set_fragment_cache` / `clear_fragment_cache` | run_pipeline が使う、起動の間だけの断片一覧のキャッシュ |
 | `get_images(stream, start, end, interval_ms=, width=, height=)` | GetImages(プロデューサー時刻)をページ送りして時刻順に返す(同じ時刻は 1 枚)。範囲の始まりの近くに断片がないと `ResourceNotFoundException` になる(実測) |
+
+### GetDataEndpoint の呼び出し
+
+GetDataEndpoint はアカウントあたり 300 TPS(引き上げ不可)。プロセス内のキャッシュだけだと、台数が増えるほど 1 つの実行環境が
+同じカメラを担当する確率が下がり、ほぼ毎回の起動で呼ぶことになる(1 万台で約 500 TPS の見込み。[docs/scale.md](../../docs/scale.md))。
+そこで run_pipeline は、リースを取るときに読む処理済み位置の件(`CURSOR#{kind}`)の `kvs_endpoints` からエンドポイントを読み込み、
+この起動で取り直したものがあれば **リースを解放する UpdateItem で一緒に** 保存する(DynamoDB の呼び出し回数は増えない)。
+期限はプロセス内のキャッシュと同じ 1 時間(取得時刻から)。これで GetDataEndpoint はストリーム × API ごとに 1 時間に約 1 回になる。
 
 ### 遅れて届く断片(経緯)
 

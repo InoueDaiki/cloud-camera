@@ -129,7 +129,9 @@ locals {
     aws_glue_catalog_database.main.arn,
     aws_glue_catalog_table.detections.arn,
   ]
-  iot_thing_arns = [for gw, t in aws_iot_thing.gateway : t.arn]
+  # ゲートウェイの Thing を 1 つずつ並べると、ロールのインラインポリシーの上限(10,240 文字)に約 110 ゲートウェイで当たるので
+  # 接頭辞のワイルドカードにする(docs/scale.md)。Thing 名は {p}-{gateway_id}
+  iot_thing_arns = ["arn:${local.partition}:iot:${local.region}:${local.account_id}:thing/${local.iot_thing_prefix}gw-*"]
 }
 
 data "aws_iam_policy_document" "lambda" {

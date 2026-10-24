@@ -92,6 +92,20 @@ def test_upstream_done_skips_own_watermark(table, clock):
     assert len(proc.calls) == 5 and res["stopped"] == "caught_up"
 
 
+def test_upstream_done_does_not_call_list_fragments(table, clock):
+    """上流がすべて確定させていれば、ListFragments(ウォーターマーク)を呼ばない(1 起動あたりの KVS 呼び出しを減らす)。"""
+    set_video_cursor(table, "2026-10-24T10:30:00Z")
+    stream = Stream()
+    res = run(table, clock, Proc(), stream)
+    assert res["stopped"] == "caught_up" and stream.calls == 0
+    assert "watermark" not in res
+    # 上流を待つだけの起動でも呼ばない(対象は 10:30 の区間、動画の退避は 10:30 まで)
+    clock.dt = T(10, 31, 35)
+    stream = Stream()
+    res = run(table, clock, Proc(), stream)
+    assert res["stopped"] == "waiting_upstream" and stream.calls == 0
+
+
 def test_no_upstream_cursor_waits(table, clock):
     proc = Proc()
     res = run(table, clock, proc, Stream())

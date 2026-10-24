@@ -215,6 +215,9 @@ def run_pipeline(
     summary["processed_until_before"] = iso(cursor)
 
     stream = stream_name or kvs.stream_name_for(camera_id)
+    # 前の起動(別の実行環境かもしれない)が取った KVS のデータエンドポイントを使い回す(GetDataEndpoint を減らす)
+    saved_endpoints = resp["Attributes"].get("kvs_endpoints")
+    kvs.import_endpoints(stream, saved_endpoints)
     try:
         _loop(
             summary=summary,
@@ -243,12 +246,18 @@ def run_pipeline(
     finally:
         kvs.clear_fragment_cache(stream)
         # 5. リースを解放する(自分が持っているときだけ)
+        release: dict[str, Any] = {
+            "Key": {"camera_id": camera_id, "sk": cursor_sk},
+            "UpdateExpression": "REMOVE lease_until",
+            "ConditionExpression": Attr("lease_owner").eq(owner),
+        }
+        endpoints = kvs.export_endpoints(stream)
+        if endpoints and endpoints != _plain(saved_endpoints):
+            # この起動で取り直したエンドポイントがあれば、リースの解放と同じ書き込みで保存する(書き込み回数は増えない)
+            release["UpdateExpression"] = "SET kvs_endpoints = :ep REMOVE lease_until"
+            release["ExpressionAttributeValues"] = {":ep": endpoints}
         try:
-            tbl.update_item(
-                Key={"camera_id": camera_id, "sk": cursor_sk},
-                UpdateExpression="REMOVE lease_until",
-                ConditionExpression=Attr("lease_owner").eq(owner),
-            )
+            tbl.update_item(**release)
         except ClientError as e:
             if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
                 raise
@@ -289,9 +298,20 @@ def _loop(
     summary["target_end"] = iso(target_end)
     summary["processed_until"] = iso(cursor)
     wm: int | None = None
-    if watermark_fn is not None and cursor + MINUTE <= target_end:
-        # カーソル以降の断片を 1 回で取る(process_minute の list_fragments はこの結果から返る)
-        wm = watermark_fn(cursor, t_now + timedelta(seconds=WATERMARK_FUTURE_SECONDS))
+    wm_fetched = False
+
+    def fetch_watermark(since: datetime) -> int | None:
+        # 断片を 1 回で取る(process_minute の list_fragments はこの結果から返る)
+        nonlocal wm, wm_fetched
+        if not wm_fetched:
+            wm_fetched = True
+            wm = watermark_fn(since, t_now + timedelta(seconds=WATERMARK_FUTURE_SECONDS))
+        return wm
+
+    if watermark_fn is not None and upstream_fn is None and cursor + MINUTE <= target_end:
+        # カーソル以降の断片を最初に 1 回取る。上流があるとき(物体検出)は、上流が確定させた区間には
+        # ウォーターマークが要らないので、要る区間に来たときだけ取る(通常は ListFragments を呼ばない。docs/scale.md)
+        fetch_watermark(cursor)
     upstream_until: datetime | None = None
     if upstream_fn is not None and cursor + MINUTE <= target_end:
         upstream_until = upstream_fn()
@@ -319,6 +339,7 @@ def _loop(
         if watermark_fn is not None and not upstream_done:
             # 3. 区間の断片が出そろったか(ウォーターマーク)、待つ上限を過ぎたか
             late_s = (to_utc(now()) - to_utc(end)).total_seconds()
+            fetch_watermark(start)
             if wm is not None and wm >= epoch_ms(end):
                 pass
             elif late_s >= max_late_seconds:
@@ -489,6 +510,17 @@ def _process_one(
     rec.update(status=result.status, duration_ms=duration_ms)
     log("minute_done", camera_id=camera_id, kind=p, start=sk, status=result.status, attempt=attempt, duration_ms=duration_ms, max_rss_mb=max_rss_mb())
     return rec
+
+
+def _plain(v: Any) -> Any:
+    """DynamoDB から読んだ値(Decimal を含む)を export_endpoints と比べられる形にする。"""
+    if isinstance(v, dict):
+        return {k: _plain(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_plain(x) for x in v]
+    if isinstance(v, Decimal):
+        return int(v)
+    return v
 
 
 def _upstream_cursor(tbl: Any, camera_id: str, upstream_kind: str, summary: dict) -> datetime | None:

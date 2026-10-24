@@ -327,3 +327,32 @@ def test_table_from_env(table, clock):
     res = run_pipeline("VIDEO", CAM, Recorder(), lag_seconds=30, max_minutes=1, max_attempts=3, now=clock,
                        list_fragments=live_stream(clock))
     assert res["processed_until"] == "2026-10-24T10:25:00Z"
+
+
+def test_endpoints_saved_on_cursor_and_reused(table, clock, monkeypatch):
+    """取った KVS のエンドポイントを処理済み位置の件に保存し、次の起動(別の実行環境)が読み込む。"""
+    calls = []
+
+    class FakeKV:
+        def get_data_endpoint(self, StreamName, APIName):
+            calls.append((StreamName, APIName))
+            return {"DataEndpoint": f"https://{APIName.lower()}.example.com"}
+
+    def proc(camera_id, start, end):
+        kvs.get_data_endpoint("s", kvs.GET_HLS_STREAMING_SESSION_URL)
+        return MinuteResult("DONE", {})
+
+    kvs.clear_cache()
+    monkeypatch.setattr(kvs, "_kv_client", FakeKV())
+    run(table, clock, proc)
+    assert calls == [("s", kvs.GET_HLS_STREAMING_SESSION_URL)]
+    saved = cursor(table)["kvs_endpoints"]
+    assert saved[kvs.GET_HLS_STREAMING_SESSION_URL][0] == "https://get_hls_streaming_session_url.example.com"
+    assert "lease_until" not in cursor(table)
+
+    kvs.clear_cache()  # 別の実行環境
+    monkeypatch.setattr(kvs, "_kv_client", FakeKV())
+    clock.dt = T(10, 31, 45)
+    run(table, clock, proc)
+    assert len(calls) == 1  # 保存したものを使い、GetDataEndpoint を呼ばない
+    assert "lease_until" not in cursor(table)
