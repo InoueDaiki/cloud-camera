@@ -100,7 +100,7 @@ IoT 接続 $0.08 / 100 万分、Athena $5 / TB、Scheduler $1.00 / 100 万。構
 | 区間の件(`fragment_count`、`bytes`、`video_duration_ms`、`detect_duration_ms`、`frame_count`、`detect_count`、状態) | DynamoDB `{p}-state` を Query(カメラごと、SK が期間内) | 実測 |
 | KVS 取り込み、取り出し、GetImages の枚数 | CloudWatch `AWS/KinesisVideo` の `PutMedia.IncomingBytes`、`GetMP4MediaFragment.OutgoingBytes`、`GetClip.OutgoingBytes`、`GetMedia.OutgoingBytes`、`GetImages.LowRes/HighRes.ImagesCount` | 実測 |
 | HLS 取り出しの内訳 | 動画の退避 = 区間の件の `bytes` の合計、残りを視聴に回す | 実測から按分 |
-| GetImages の内訳 | 検出 = `frame_count` + DONE の区間数(区間の終わりの 1 枚)、残りをスプライトに回す | 推定 |
+| GetImages の内訳 | 検出 = `frame_count` + DONE の区間数(区間の終わりの 1 枚。実測の枚数が上限)、残りをスプライトに回す。B 案(既定)ではどちらもほぼ 0(検出が予備の経路を使った区間だけ) | 推定 |
 | Lambda | `Invocations`、`Duration`(合計)、メモリ・エフェメラルストレージ・アーキテクチャは関数の設定 | 実測 |
 | CloudWatch Logs | `AWS/Logs IncomingBytes`(ロググループごと) | 実測 |
 | S3 メディア | 期間内の時の接頭辞を ListObjectsV2(大きさと数。数 = PUT 回数とみなす) | 実測 / PUT は推定 |
@@ -157,26 +157,29 @@ KVS の ListStreams、IoT の ListThings、API Gateway の GetApis、CloudFront 
 
 ## 机上計算の既定値と結果(2026-10-24 の単価)
 
-既定値は `cost/desk.py` の `DeskParams`。video_archiver の値は [lambdas/video_archiver/README.md](../../lambdas/video_archiver/README.md) の実測
-(512 MB、1 区間 1.9 秒、スプライト 80 KB、GetImages 61 枚 / 分)。物体検出(3,008 MB、2 秒 + 60 枚 × 0.25 秒)、視聴 2 時間 / 台・月、
-質問 100 件 / 月(入力 8,000、出力 600 トークン、Nova 2 Lite jp)は仮定。
+既定値は `cost/desk.py` の `DeskParams`。**B 案**(スプライトも物体検出も clip.mp4 のキーフレームを Lambda 内でデコードし、GetImages を使わない。
+[lambdas/common/FRAMES.md](../../lambdas/common/FRAMES.md))の実 KVS での実測に合わせている: video_archiver 512 MB・1 区間 3.2 秒・スプライト 250 KB、
+detector 1,024 MB(infra の既定)・1.5 秒 + 60 枚 × 0.135 秒(yolox_tiny INT8 @640)・S3 の clip.mp4 を 1 分 1 回 GET。
+視聴 2 時間 / 台・月、質問 100 件 / 月(入力 8,000、出力 600 トークン、Nova 2 Lite jp)は仮定。
 
 | 項目 | 1 台 | 100 台(1 台あたり) | 1,000 台(1 台あたり) |
 | --- | ---: | ---: | ---: |
 | 取り込み | $3.31 | $3.31 | $3.31 |
 | 一時保持 | $0.01 | $0.01 | $0.01 |
-| 動画抽出 | $31.64 | $31.64 | $31.64 |
-| 加工・保存 | $8.55 | $8.55 | $8.29 |
-| 物体検出 | $55.24 | $55.24 | $55.24 |
+| 動画抽出 | $5.67 | $5.67 | $5.67 |
+| 加工・保存 | $8.72 | $8.72 | $8.46 |
+| 物体検出 | $5.67 | $5.67 | $5.67 |
 | 検出結果保存 | $0.61 | $0.61 | $0.60 |
 | 再生 | $0.06 | $0.06 | $0.06 |
 | 検索 | $0.53 | $0.0087 | $0.0039 |
 | 制御 | $0.24 | $0.24 | $0.24 |
-| **合計** | **$100.19** | **$99.66** | **$99.40** |
+| **合計** | **$24.82** | **$24.30** | **$24.03** |
 
-- 大きいのは **KVS GetImages**(スプライト 61 枚 / 分と検出 61 枚 / 分で、それぞれ月 $26.35)と **detector の Lambda**(仮定で $28.76)。
-  GetImages は 1 枚 $0.00001 なので、毎秒 1 枚でも 1 台・月 263 万枚になる。2 つの関数が同じ秒の画像を別々に取っているので、
-  1 回の取得で両方に使えれば $26 / 台・月減る
-- 検出を 5 秒おきにすると合計 $59.05、検出なしで $44.33(`--detect-interval-s 5` / `0`)
+- 以前の方式(GetImages をスプライトと検出で 1 分 61 枚ずつ、detector 3,008 MB・2 秒 + 60 枚 × 0.25 秒の仮定)では合計 $100.19 だった。
+  GetImages(月 $26.35 × 2)がなくなり、detector の Lambda は $28.76(仮定)→ $5.53(実測)になった。
+  同じ detector の設定(1,024 MB・実測の推論時間)で GetImages だけ戻すと $77.24(`--sprite-images-per-minute 61 --archiver-duration-s 1.9 --sprite-kb 80
+  --detector-frame-source getimages --detector-overhead-s 2.0`)。B 案はこれより 1 台・月 約 $52 安い(FRAMES.md の見積もりと同じ)
+- 大きいのは **加工・保存**(S3 の動画の保存)、**動画抽出**(KVS の HLS 取り出し $4.6 + video_archiver の Lambda $0.92)、**物体検出**(detector の Lambda $5.53)
+- 検出を 5 秒おきにすると合計 $20.99、検出なしで $18.53(`--detect-interval-s 5` / `0`)
 - 構想.md の試算例(1 Mbps、US East $0.0085 で取り込み約 $2.75)は、東京の $0.010965 で **$3.31**(GB = 2^30 バイト、301.7 GB)。
   構想.md と同じく 10^9 バイト = 1 GB として数えると 324 GB × $0.010965 = $3.55。保持 1 時間分の保存は $0.0105、HLS で 1 時間視聴は $0.0064

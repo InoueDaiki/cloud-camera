@@ -36,6 +36,14 @@ assert removed == 5 and merged.num_rows == 5
 back = pq.ParquetFile(io.BytesIO(parquet_store._serialize(merged))).read()
 assert back.num_rows == 5
 print("parquet: ok")
+
+# PyAV(pyav_min、arm64 の zip だけ): /var/task/lib の FFmpeg を読み込めて、HEVC / H.264 のデコーダがあること
+if os.path.isdir("/var/task/av"):
+    import av  # noqa: E402
+
+    names = {c for c in av.codecs_available}
+    assert {"hevc", "h264"} <= names, names
+    print(f"pyav: {av.__version__} ffmpeg {av.library_versions.get('libavcodec')} decoders ok")
 print("SMOKE OK")
 # Rosetta 上の x86_64 では ONNX Runtime のスレッドプールが終了時に止まることがあるので、明示的に抜ける
 sys.stdout.flush()

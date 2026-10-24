@@ -7,7 +7,7 @@ KVS の映像を 1 分区間ごとに S3 へ退避する Lambda。EventBridge Sc
 | --- | --- |
 | `handler.py` | `lambda_handler`(環境変数を読んで `run_pipeline` を呼ぶ) |
 | `archiver.py` | 1 区間の処理(断片の一覧、clip.mp4、index.m3u8、sprite.jpg、DynamoDB の属性) |
-| `build.sh` | `build/video_archiver.zip`(リポジトリ直下)を作る。Pillow(arm64)と `lambdas/common` を同梱 |
+| `build.sh` | `build/video_archiver.zip`(リポジトリ直下)を作る。Pillow(arm64)、最小構成の PyAV(`lambdas/common/pyav_min`)、`lambdas/common` を同梱し、展開後 250 MB 以内かを確かめる |
 | `testing/` | 実 KVS での検証用の道具(H.265 送信コンテナ、調査スクリプト、ローカル実行) |
 
 ## 環境変数
@@ -23,11 +23,12 @@ KVS の映像を 1 分区間ごとに S3 へ退避する Lambda。EventBridge Sc
 | `MEDIA_RETENTION_DAYS` | `expires_at` の日数(S3 のライフサイクルと揃える) | 30 |
 | `MAX_LATE_SECONDS` | ウォーターマークが区間の終わりを越えないとき、区間の終わりから最大何秒待つか(共通処理が読む。エッジのバッファ上限 + 余裕) | 720 |
 
-推奨設定: メモリ 256〜512 MB、タイムアウト 60 秒(下の実測を参照)。
+推奨設定: メモリ 512 MB、タイムアウト 60 秒以上(下の実測を参照。キーフレームのデコードは CPU を使うので、256 MB だと時間がほぼ倍になる)。
 
 ## IAM
 
-- `kinesisvideo:GetDataEndpoint`、`ListFragments`、`GetImages`、`GetHLSStreamingSessionURL`、`GetMP4InitFragment`、`GetMP4MediaFragment`(ストリーム `{p}-*`)
+- `kinesisvideo:GetDataEndpoint`、`ListFragments`、`GetHLSStreamingSessionURL`、`GetHLSMasterPlaylist`、`GetHLSMediaPlaylist`、`GetMP4InitFragment`、`GetMP4MediaFragment`(ストリーム `{p}-*`)。
+  **GetImages は使わない**(スプライトは clip.mp4 からデコードする)
 - `s3:PutObject`(メディアバケット)
 - `dynamodb:UpdateItem`(状態テーブル)
 
@@ -36,7 +37,7 @@ KVS の映像を 1 分区間ごとに S3 へ退避する Lambda。EventBridge Sc
 0. 断片が出そろったか(ウォーターマーク)は `run_pipeline` が判定してから呼ぶ([common の README](../common/README.md#ウォーターマーク区間を処理してよいか))
 1. **ListFragments**(プロデューサー時刻)で断片を取る(`run_pipeline` が起動ごとに 1 回取った結果のキャッシュから返る。同じ ProducerTimestamp の再送は 1 つにする)。断片がなければ `EMPTY`(`segments: []`、`fragment_count: 0`、`bytes: 0`)。S3 には何も書かない
 2. **clip.mp4**: HLS ON_DEMAND(fMP4)セッションを開き、init と、1. で選んだ断片をそのまま連結する
-3. **sprite.jpg**: GetImages(1 秒間隔、160×90、JPEG)→ Pillow で 10×6 のシート
+3. **sprite.jpg**: 2. の clip.mp4 のキーフレーム(1 秒に 1 枚)を PyAV でデコードし、160×90 に縮めて 10×6 のシートにする(`common.frames`)
 4. **index.m3u8**: clip.mp4 を `EXT-X-BYTERANGE` で参照するプレイリスト
 5. S3 に clip → sprite → プレイリストの順で PUT。その後 `run_pipeline` が区間の件 → カーソルの順に書く
 
@@ -89,10 +90,18 @@ HLS 方式の注意点:
 
 ### sprite.jpg
 
-- GetImages は **H.265 で動いた**(JPEG、160×90 を指定)。1 ページ 25 枚程度で返るのでページ送りする。区間 [start, end) を指定すると終わりの時刻も含む 61 枚が返る(61 枚目は捨てる)
-- コマ `i`(0〜59)= 区間の開始 + i 秒の画像。左上から右へ、10 枚で折り返す。画像がない秒は **黒**(`segments` と突き合わせれば録画なしと分かる)
-- GetImages は、範囲の始まりの近くに断片がないと `ResourceNotFoundException`(No fragments found)になる(区間の途中で録画が始まった場合など。実測)。そのときは録画がある範囲ごとに「開始を秒に切り上げた時刻 〜 終わり」で取り直す
-- スプライトが作れなくても動画は退避する(`sprite_error` に理由を残して `DONE`)
+作ったばかりの clip.mp4 から、**キーフレームだけ** を PyAV でデコードして作る(`common.frames`、[lambdas/common/FRAMES.md](../common/FRAMES.md))。GetImages は使わない。
+
+- 区間 [start, end) を 1 秒ごとの枠に分け、各枠に入る最初のキーフレームを 1 枚使う。非キーフレームはデコーダに渡さない(1 分 900 フレームのうち 60 枚)
+- 各フレームの時刻は「断片の開始(ListFragments の ProducerTimestamp)+ 断片の中での pts の差」。断片ごとに時刻を当てるので、録画の切れ目があってもずれない
+- コマ `i`(0〜59)= 枠 [区間の開始 + i 秒, + i + 1 秒) のキーフレーム。**絵の時刻は秒ちょうどではなく、その秒の中のキーフレームの実際の時刻**
+  (キーフレームの位相は送信開始時刻で決まる。実測では毎秒 .979 や .634 など、送信ごとに一定)。以前の GetImages(指定した時刻の直後のフレーム)より最大 1 秒後ろになる
+- 区間の頭の枠には、その区間に始まる断片のキーフレームが入る。前の区間の断片から続く部分は、この区間の clip に入っていないので使わない
+- キーフレームがない枠(録画なし)は **黒**(`segments` と突き合わせれば録画なしと分かる)。キーフレームが 2 秒おきなら枠は 1 つおきに空く
+- 縮小は swscale(AREA)。JPEG を通さない分、GetImages 版より細部が残る(スプライトは 80 KB → 約 250 KB、1 Mbps のサンプル動画で実測)
+- デコードに失敗したら(壊れた断片など)全コマ黒のシートを置き、`sprite_error` に理由を残して `DONE` にする(動画は退避する)
+- GetImages を使わないので、GetImages の `MEDIA_ERROR`(FRAMES.md の「GetImages の MEDIA_ERROR」)や、範囲の始まりに断片がないときの
+  `ResourceNotFoundException` の扱いは要らなくなった
 
 ### 回線断の試験(2026-10-24、実 KVS)
 
@@ -131,22 +140,42 @@ HLS 方式の注意点:
 区間ごとに `minute_metrics` を出す。CloudWatch Logs Insights の例:
 
 ```
-fields @timestamp, total_ms, clip_ms, images_ms, s3_ms, clip_bytes, fragment_count, max_rss_mb
+fields @timestamp, total_ms, clip_ms, sprite_ms, decode_ms, s3_ms, clip_bytes, fragment_count, max_rss_mb
 | filter event = "minute_metrics" and status = "DONE"
 | stats avg(total_ms), max(total_ms), avg(clip_bytes), max(max_rss_mb)
 ```
 
 | フィールド | 内容 |
 | --- | --- |
-| `list_ms` / `clip_ms` / `images_ms` / `sprite_ms` / `s3_ms` / `total_ms` | 各段階の所要時間 |
+| `list_ms` / `clip_ms` / `sprite_ms` / `s3_ms` / `total_ms` | 各段階の所要時間(`sprite_ms` はキーフレームのデコード、縮小、JPEG の作成) |
+| `decode_ms` / `scale_ms` | `sprite_ms` のうちデコード、縮小の時間 |
+| `keyframes` / `decoded` / `decode_lost` | clip.mp4 のキーフレームの数、デコードした数(区間の外と、枠が埋まった分は除く)、デコードできなかった数 |
 | `clip_bytes` / `kvs_bytes` / `sprite_bytes` | clip.mp4、KVS 上の断片の合計、スプライトのバイト数 |
-| `fragment_count` / `listed_fragments` / `images` / `sprite_frames` | 件数 |
+| `fragment_count` / `listed_fragments` / `sprite_frames` | 件数 |
 | `recorded_ms` | `segments` の合計 |
 | `max_rss_mb` | プロセスの最大常駐メモリ |
 
 共通処理の `minute_done` / `minute_retry` / `minute_failed` / `pipeline_done` も出る。Lambda の REPORT 行と合わせて見る。
 
-## 実測(2026-10-24、arm64、H.265 1280×720 15fps、キーフレーム 1 秒、約 0.6 Mbps)
+## 実測: B 案(キーフレームをデコード、2026-10-24)
+
+`emulator/` のサンプル動画(`crosswalk_toronto.mp4`、人と車)を H.265 1280×720 15fps・キーフレーム 1 秒(約 1 Mbps)で配信し、
+`testing/kvssink` の送信コンテナで一時 KVS ストリームに送って、`build.sh` で作った zip を一時 Lambda(arm64、512 MB)で毎分 1 回動かした。
+一時関数の IAM には GetImages の権限を付けていない(呼べば AccessDenied になる)。
+
+| メモリ | Duration(REPORT) | 内訳(clip / sprite(うちデコード・縮小)/ S3) | Max Memory Used | GB 秒 / 区間 |
+| --- | --- | --- | --- | --- |
+| 512 MB | 3.25〜3.37 秒(区間の処理は 3.09〜3.19 秒) | 0.88 / 2.06(0.98・1.03)/ 0.19 秒 | 163〜169 MB | 約 1.7 |
+
+- 1 区間(60 断片、clip.mp4 7.8 MB)で 60 コマ、デコードの失敗 0。sprite.jpg は約 255 KB。clip.mp4 は ffprobe で 900 フレーム
+- コールドスタート: Init 0.3 秒。以前(GetImages、0.6 Mbps)の 1.9 秒より 1.4 秒長いが、GetImages の費用(1 台・月 $26)がなくなる
+- 最大メモリは 160 MB 台(clip.mp4 をメモリに持つ分を含む)。FRAMES.md のベンチマーク(330〜370 MB)は 2 つのサイズを同時に作っていたため。
+  1080p や 2 Mbps では clip とフレームの分だけ増えるので、512 MB のままにしている
+- GetImages の呼び出し: 0 回(CloudWatch の `GetImages.Requests` なし、ログに AccessDenied なし)
+
+以下は以前の方式(GetImages でスプライトを作っていたとき)の実測。
+
+## 実測(GetImages 版、2026-10-24、arm64、H.265 1280×720 15fps、キーフレーム 1 秒、約 0.6 Mbps)
 
 一時 Lambda(`cc-tmp-video-archiver`)を毎分 1 回呼び、1 回 = 1 区間(録画 60 秒)を処理したときの値。ウォームスタートの 2 回の平均。
 
@@ -170,7 +199,8 @@ mise exec -- uv sync
 mise exec -- uv run pytest
 ```
 
-S3 と DynamoDB は moto、KVS はスタブ(実 AWS には接続しない)。
+S3 と DynamoDB は moto、KVS はスタブ(実 AWS には接続しない)。スプライトのテストは、PyAV(dev の依存。PyPI の wheel の libx265)で
+その場で作った H.265 の fMP4(`common.tests.media`)をデコードし、秒ごとに明るさを変えた絵が正しい枠に入るかまで確かめる。
 
 ## 実 KVS での検証手順
 

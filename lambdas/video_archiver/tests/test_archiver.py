@@ -1,13 +1,15 @@
 import io
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import boto3
 import pytest
 from moto import mock_aws
 from PIL import Image as PILImage
+from PIL import ImageStat
 
 import archiver
 from archiver import Archiver, Clip, build_clip, build_playlist, build_sprite, parse_master_playlist, parse_media_playlist
+from common.tests.media import moof_offsets
 from common import kvs
 from common.timeutil import epoch_ms
 
@@ -118,46 +120,58 @@ def test_build_playlist_with_gap():
     assert lines[i + 1].startswith("#EXT-X-PROGRAM-DATE-TIME")
 
 
-def _jpeg(color, size=(160, 90)):
-    b = io.BytesIO()
-    PILImage.new("RGB", size, color).save(b, format="JPEG")
-    return b.getvalue()
+def _clip_from_fmp4(data: bytes, producer_ms: list[int]) -> Clip:
+    """make_fmp4 の出力を build_clip の結果と同じ形(init + 断片、parts、fragments)にする。"""
+    offs = moof_offsets(data)
+    ends = offs[1:] + [len(data)]
+    frs = [kvs.Fragment(number=str(i), producer_ms=ms, server_ms=ms, length_ms=900, size=e - o)
+           for i, (ms, o, e) in enumerate(zip(producer_ms, offs, ends))]
+    parts = [[o, e - o, 1000] for o, e in zip(offs, ends)]
+    return Clip(data=data, init_length=offs[0], parts=parts, fragments=frs)
 
 
-def test_build_sprite_layout():
-    start = T(10, 20)
-    imgs = [
-        kvs.Image(ts_ms=epoch_ms(start), content=_jpeg((255, 0, 0)), error=None),  # 0 秒 → 左上
-        kvs.Image(ts_ms=epoch_ms(T(10, 20, 11)), content=_jpeg((0, 0, 255), (320, 180)), error=None),  # 11 秒 → 2 行目 2 列目(縮小)
-        kvs.Image(ts_ms=epoch_ms(T(10, 20, 59)), content=_jpeg((0, 255, 0)), error=None),  # 59 秒 → 右下
-        kvs.Image(ts_ms=epoch_ms(T(10, 20, 5)), content=None, error="NO_MEDIA"),
-        kvs.Image(ts_ms=epoch_ms(T(10, 21, 0)), content=_jpeg((255, 255, 255)), error=None),  # 範囲外
-        kvs.Image(ts_ms=epoch_ms(T(10, 20, 30)), content=b"broken", error=None),
-    ]
-    data, n = build_sprite(imgs, start)
-    assert n == 3
-    sheet = PILImage.open(io.BytesIO(data))
+def test_build_sprite_from_keyframes():
+    """clip.mp4 のキーフレームを 1 秒 1 枚デコードし、枠(秒)の位置に並べる。GetImages は使わない。"""
+    pytest.importorskip("av")
+    from common.tests.media import BASE, START, level, make_fmp4
+
+    data = make_fmp4(4)
+    # 断片の開始(プロデューサー時刻)。3 本目の前に 10 秒の切れ目、4 本目は区間の外
+    producer = [BASE, BASE + 1000, BASE + 12_000, BASE + 61_000]
+    clip = _clip_from_fmp4(data, producer)
+    start = datetime.fromtimestamp(START / 1000, timezone.utc)
+    sp = build_sprite(clip, start, start + timedelta(minutes=1))
+    assert sp.error is None
+    assert sp.frames == 3
+    assert sp.stats["decoded"] == 3 and sp.stats["skipped_outside"] == 1
+    sheet = PILImage.open(io.BytesIO(sp.jpeg))
     assert sheet.size == (1600, 540)
 
-    def px(slot):
-        x, y = (slot % 10) * 160 + 80, (slot // 10) * 90 + 45
-        return sheet.getpixel((x, y))
+    def mean(slot):
+        x, y = (slot % 10) * 160, (slot // 10) * 90
+        a = sheet.crop((x + 100, y + 20, x + 150, y + 70))  # 右寄り(左端の白い印を避ける)
+        return ImageStat.Stat(a.convert("L")).mean[0]
 
-    def near(a, b):
-        return all(abs(x - y) < 40 for x, y in zip(a, b))
+    # 断片の開始 + 0.979 秒の位相 → コマ 0、1、12。各秒の明るさ(level)でどのキーフレームかを確かめる
+    assert abs(mean(0) - level(0)) < 12
+    assert abs(mean(1) - level(1)) < 12
+    assert abs(mean(12) - level(2)) < 12
+    assert mean(2) < 5 and mean(59) < 5  # キーフレームがない枠は黒
 
-    assert near(px(0), (255, 0, 0))
-    assert near(px(11), (0, 0, 255))
-    assert near(px(59), (0, 255, 0))
-    assert near(px(5), (0, 0, 0))  # 画像がない秒は黒
-    assert near(px(30), (0, 0, 0))
+
+def test_build_sprite_broken_clip_returns_black():
+    pytest.importorskip("av")
+    clip = Clip(data=b"not mp4" * 10, init_length=7, parts=[[7, 63, 1000]], fragments=[frag(1, T(10, 20))])
+    sp = build_sprite(clip, T(10, 20), T(10, 21))
+    assert sp.frames == 0 and sp.error
+    assert PILImage.open(io.BytesIO(sp.jpeg)).size == (1600, 540)
 
 
 class FakeKvs:
-    def __init__(self, frags, images=None, images_error=None):
+    def __init__(self, frags, sprite_frames=0, sprite_error=None):
         self.frags = frags
-        self.images = images or []
-        self.images_error = images_error
+        self.sprite_frames = sprite_frames
+        self.sprite_error = sprite_error
         self.calls = []
 
     def list_fragments(self, stream, start, end):
@@ -173,11 +187,9 @@ class FakeKvs:
             data += b"F" * 4
         return Clip(data=data, init_length=8, parts=parts, fragments=list(frags))
 
-    def get_images(self, stream, start, end, **kw):
-        self.calls.append(("images", kw))
-        if self.images_error:
-            raise self.images_error
-        return self.images
+    def sprite_builder(self, clip, start, end):
+        self.calls.append(("sprite", start, end, len(clip.fragments)))
+        return archiver.Sprite(b"JPEG", self.sprite_frames, {"decode_ms": 1.0}, self.sprite_error)
 
 
 @pytest.fixture
@@ -190,7 +202,7 @@ def s3():
 
 def make(s3, fk):
     return Archiver(bucket=BUCKET, s3=s3, list_fragments=fk.list_fragments, clip_builder=fk.clip_builder,
-                    get_images=fk.get_images)
+                    sprite_builder=fk.sprite_builder)
 
 
 def test_process_minute_empty(s3):
@@ -204,8 +216,7 @@ def test_process_minute_empty(s3):
 
 def test_process_minute_done(s3):
     frs = [frag(1, T(10, 20, 0)), frag(2, T(10, 20, 1)), frag(3, T(10, 20, 40))]
-    imgs = [kvs.Image(ts_ms=epoch_ms(T(10, 20, s)), content=_jpeg((200, 200, 200)), error=None) for s in (0, 1, 40)]
-    fk = FakeKvs(frs, imgs)
+    fk = FakeKvs(frs, sprite_frames=3)
     r = make(s3, fk).process_minute("cam-001", T(10, 20), T(10, 21))
     assert r.status == "DONE"
     a = r.attributes
@@ -214,7 +225,8 @@ def test_process_minute_done(s3):
     assert a["segments"] == [[epoch_ms(T(10, 20, 0)), epoch_ms(T(10, 20, 2))], [epoch_ms(T(10, 20, 40)), epoch_ms(T(10, 20, 41))]]
     assert a["hls"] == {"init_length": 8, "parts": [[8, 4, 1000], [12, 4, 1000], [16, 4, 1000]]}
     assert a["fragment_count"] == 3 and a["bytes"] == 20 and a["sprite_frames"] == 3
-    assert ("images", {"interval_ms": 1000, "width": 160, "height": 90}) in fk.calls
+    assert ("sprite", T(10, 20), T(10, 21), 3) in fk.calls
+    assert not any(c[0] == "images" for c in fk.calls)  # GetImages は呼ばない
     objs = {o["Key"]: o for o in s3.list_objects_v2(Bucket=BUCKET)["Contents"]}
     assert set(objs) == set(a["files"].values())
     head = s3.head_object(Bucket=BUCKET, Key=p + "index.m3u8")
@@ -225,11 +237,12 @@ def test_process_minute_done(s3):
 
 
 def test_process_minute_sprite_failure_still_archives(s3):
-    fk = FakeKvs([frag(1, T(10, 20, 0))], images_error=RuntimeError("H.265 not supported"))
+    fk = FakeKvs([frag(1, T(10, 20, 0))], sprite_error="InvalidDataError: broken")
     r = make(s3, fk).process_minute("cam-001", T(10, 20), T(10, 21))
     assert r.status == "DONE"
     assert r.attributes["sprite_frames"] == 0
-    assert "H.265" in r.attributes["sprite_error"]
+    assert "broken" in r.attributes["sprite_error"]
+    assert s3.list_objects_v2(Bucket=BUCKET)["KeyCount"] == 3
 
 
 def test_process_minute_clip_failure_raises(s3):
@@ -238,41 +251,8 @@ def test_process_minute_clip_failure_raises(s3):
     def boom(*a):
         raise archiver.ArchiveError("hls")
 
-    arch = Archiver(bucket=BUCKET, s3=s3, list_fragments=fk.list_fragments, clip_builder=boom, get_images=fk.get_images)
+    arch = Archiver(bucket=BUCKET, s3=s3, list_fragments=fk.list_fragments, clip_builder=boom,
+                    sprite_builder=fk.sprite_builder)
     with pytest.raises(archiver.ArchiveError):
         arch.process_minute("cam-001", T(10, 20), T(10, 21))
     assert s3.list_objects_v2(Bucket=BUCKET).get("KeyCount") == 0
-
-
-class NotFound(Exception):
-    pass
-
-
-NotFound.__name__ = "ResourceNotFoundException"
-
-
-def test_images_fallback_per_segment(s3):
-    calls = []
-
-    def gi(stream, a, b, **kw):
-        calls.append((a, b))
-        if len(calls) == 1:
-            raise NotFound("No fragments found in the stream for the GetImages request.")
-        return [kvs.Image(ts_ms=epoch_ms(a), content=b"x", error=None)]
-
-    arch = Archiver(bucket=BUCKET, s3=s3, get_images=gi)
-    segs = [[epoch_ms(T(10, 20, 30, 979)), epoch_ms(T(10, 20, 40, 500))],
-            [epoch_ms(T(10, 20, 50)), epoch_ms(T(10, 21, 0, 900))]]
-    imgs, err = arch._images("s", T(10, 20), T(10, 21), segs)
-    assert err is None
-    # 1 回目は区間全体、失敗したら範囲ごと(開始は秒に切り上げ、終わりは区間の終わりで切る)
-    assert calls == [(T(10, 20), T(10, 21)), (T(10, 20, 31), T(10, 20, 40, 500)), (T(10, 20, 50), T(10, 21))]
-    assert len(imgs) == 2
-
-
-def test_images_other_error_is_reported(s3):
-    def gi(stream, a, b, **kw):
-        raise RuntimeError("throttled")
-
-    imgs, err = Archiver(bucket=BUCKET, s3=s3, get_images=gi)._images("s", T(10, 20), T(10, 21), [[0, 1]])
-    assert imgs == [] and "throttled" in err

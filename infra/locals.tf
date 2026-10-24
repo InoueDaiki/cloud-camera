@@ -25,6 +25,7 @@ locals {
 
   # Lambda の定義。キーは build/<key>.zip とディレクトリ名に対応する
   lambda_defaults = {
+    # video_archiver はスプライト用にキーフレームをデコードする(最大メモリ 330〜370 MB。256 MB は上限に張り付く。lambdas/common/FRAMES.md)
     video_archiver = { memory_size = 512, timeout = 300, ephemeral_storage = 1024 }
     detector       = { memory_size = 1024, timeout = 300, ephemeral_storage = 1024 }
     api            = { memory_size = 512, timeout = 30, ephemeral_storage = 512 }

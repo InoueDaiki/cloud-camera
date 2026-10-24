@@ -71,8 +71,9 @@ def cmd_desk(a) -> None:
         "机上計算。物体検出の推論時間、視聴時間、質問数とトークン数は仮定(実測で置き換える)",
         "GB は 2^30 バイト(AWS の課金の GB)。1 Mbps × 30 日 = 324 × 10^9 バイト = 301.7 GB",
         "Bedrock の jp. 推論プロファイルは、リージョン内(Regional)の単価で計算(global. は Global の単価)",
-        ("動画の退避(スプライト)と物体検出の両方が GetImages を呼ぶ。KVS の GetImages は 1 枚 $0.00001 なので、"
-        "毎秒 1 枚でも 1 台・月 259 万枚になる"),
+        ("既定は B 案: スプライトも物体検出も clip.mp4 のキーフレームを Lambda 内でデコードし、GetImages を呼ばない"
+         "(lambdas/common/FRAMES.md)。以前の方式(GetImages、1 枚 $0.00001、1 台・月 259 万枚 × 2)は "
+         "--sprite-images-per-minute 61 --archiver-duration-s 1.9 --detector-frame-source getimages --detector-overhead-s 2.0 で試算できる"),
     ]
     text = report.render("コスト試算(机上計算)", lines, book,
                          meta={"モード": "机上計算", "変更した引数": json.dumps(kw, ensure_ascii=False) if kw else "なし(既定値)"},

@@ -21,6 +21,10 @@ locals {
     IOT_DATA_ENDPOINT    = data.aws_iot_endpoint.data.endpoint_address
     IOT_THING_PREFIX     = local.iot_thing_prefix
     CAMERAS              = jsonencode({ for c in local.cameras : c => local.camera_gateway[c] })
+    # detector のフレーム源(clip = 動画の退避の clip.mp4 をデコード、getimages = KVS GetImages)と、
+    # clip のときに動画の退避を待つ上限(区間の終わりからの秒。過ぎたら GetImages で取る)
+    FRAME_SOURCE              = var.detector_frame_source
+    UPSTREAM_MAX_WAIT_SECONDS = tostring(var.detector_upstream_max_wait_seconds)
   }
 }
 
@@ -160,14 +164,13 @@ data "aws_iam_policy_document" "lambda" {
         "kinesisvideo:DescribeStream",
         "kinesisvideo:GetDataEndpoint",
         "kinesisvideo:ListFragments",
-        "kinesisvideo:GetClip",
-        "kinesisvideo:GetImages",
         "kinesisvideo:GetHLSStreamingSessionURL",
         "kinesisvideo:GetHLSMasterPlaylist",
         "kinesisvideo:GetHLSMediaPlaylist",
         "kinesisvideo:GetMP4InitFragment",
         "kinesisvideo:GetMP4MediaFragment",
       ]
+      # GetImages は予備の経路(動画の退避が FAILED の区間、FRAME_SOURCE=getimages)で使う
       detector = [
         "kinesisvideo:DescribeStream",
         "kinesisvideo:GetDataEndpoint",
@@ -201,8 +204,9 @@ data "aws_iam_policy_document" "lambda" {
       resources = ["${aws_s3_bucket.this["media"].arn}/*"]
     }
   }
+  # detector は動画の退避が置いた clip.mp4 を読む
   dynamic "statement" {
-    for_each = each.key == "api" ? [1] : []
+    for_each = contains(["api", "detector"], each.key) ? [1] : []
     content {
       sid       = "MediaRead"
       actions   = ["s3:GetObject"]

@@ -42,8 +42,20 @@ def test_bitrate_scales_ingest_and_storage():
     assert b.by_category["加工・保存"] > a.by_category["加工・保存"]
 
 
+def test_default_is_plan_b_without_getimages():
+    """既定(B 案)は GetImages を呼ばない。detector は S3 の clip.mp4 を 1 分 1 回 GET する。"""
+    lines = desk.build_lines(desk.DeskParams())
+    assert not any(x.price_key.startswith("kvs.getimages") for x in lines)
+    assert line(lines, "S3 GET(clip.mp4)").qty == pytest.approx(43200)
+    old = desk.build_lines(desk.DeskParams(sprite_images_per_minute=61, detector_frame_source="getimages"))
+    assert line(old, "KVS GetImages(スプライト)").qty == pytest.approx(61 * 43200)
+    assert line(old, "KVS GetImages(推論用)").qty == pytest.approx(61 * 43200)
+    with pytest.raises(ValueError):
+        desk.build_lines(desk.DeskParams(detector_frame_source="hls"))
+
+
 def test_detect_interval():
-    lines5 = desk.build_lines(desk.DeskParams(detect_interval_s=5))
+    lines5 = desk.build_lines(desk.DeskParams(detect_interval_s=5, detector_frame_source="getimages"))
     assert line(lines5, "KVS GetImages(推論用)").qty == pytest.approx((12 + 1) * 43200)
     lines0 = desk.build_lines(desk.DeskParams(detect_interval_s=0))
     assert not any(x.category == "物体検出" for x in lines0)

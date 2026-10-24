@@ -16,6 +16,12 @@
    試行回数が上限に達した区間、KVS の保持期限が近い(過ぎた)区間は FAILED で確定させる。
 5. Lambda の残り時間が足りなくなったら打ち切る。最後にリースを解放する。
 
+上流(upstream_kind)を指定すると、3. の前に「上流の処理済み位置 ≥ e」も条件にする(物体検出は動画の退避の
+clip.mp4 を読むので、動画の退避が確定させた区間だけを処理する)。上流の処理済み位置は起動ごとに 1 回読む。
+上流が確定させた区間は、上流がウォーターマークで判定済みなので自分のウォーターマークは見ない。
+上流が upstream_max_wait_seconds(区間の終わりから)を過ぎても進まないときだけ、自分のウォーターマークで判定して処理する
+(process_minute は上流の結果がないことを見て、予備の経路で取る)。
+
 書く順序は「S3(process_minute の中)→ 区間の件 → 処理済み位置」。
 """
 
@@ -56,6 +62,16 @@ DEFAULT_LEASE_SECONDS = 900
 MAX_LATE_SECONDS = 720
 # ウォーターマークを求めるときの ListFragments の範囲の終わり(現在 + これ)。時計のずれの余裕
 WATERMARK_FUTURE_SECONDS = 60
+# 上流(動画の退避)の処理済み位置を待つ上限(区間の終わりからの秒)。過ぎたら上流なしで処理する(予備の経路)。
+# 上流のウォーターマーク待ち(MAX_LATE_SECONDS 720 秒)+ lag より長く、KVS の保持期限(1 時間)より十分前
+UPSTREAM_MAX_WAIT_SECONDS = 1800
+
+
+def upstream_max_wait_seconds(v: int | None = None) -> int:
+    """上流を待つ上限(秒)。省略時は環境変数 UPSTREAM_MAX_WAIT_SECONDS、既定 1800。"""
+    if v is not None:
+        return v
+    return int(os.environ.get("UPSTREAM_MAX_WAIT_SECONDS") or UPSTREAM_MAX_WAIT_SECONDS)
 
 
 @dataclass
@@ -135,6 +151,8 @@ def run_pipeline(
     stream_name: str | None = None,
     list_fragments: Callable[..., list] | None = None,
     use_watermark: bool = True,
+    upstream_kind: Kind | None = None,
+    upstream_max_wait: int | None = None,
 ) -> dict:
     """1 回の起動ぶんの区間ループを回し、結果の要約を返す。
 
@@ -146,9 +164,13 @@ def run_pipeline(
     stream_name: KVS のストリーム名(省略時は kvs.stream_name_for(camera_id))。
     list_fragments: kvs.list_fragments の差し替え(テスト用)。
     use_watermark: False ならウォーターマークを見ずに lag だけで処理する(KVS を使わないテスト用)。
+    upstream_kind: 上流の種類(例: 物体検出なら "VIDEO")。上流の処理済み位置を越えて処理しない(README の「上流を待つ」)。
+    upstream_max_wait: 上流を待つ上限(秒、省略時は環境変数 UPSTREAM_MAX_WAIT_SECONDS、既定 1800)。
     """
     if kind not in _PREFIX:
         raise ValueError(f"unknown kind: {kind}")
+    if upstream_kind is not None and (upstream_kind not in _PREFIX or upstream_kind == kind):
+        raise ValueError(f"invalid upstream_kind: {upstream_kind}")
     p = _PREFIX[kind]
     tbl = _table(table)
     cursor_sk = f"CURSOR#{kind}"
@@ -215,6 +237,8 @@ def run_pipeline(
             watermark_fn=(lambda s, e: _watermark(stream, s, e, list_fragments or kvs.list_fragments, summary))
             if use_watermark else None,
             max_late_seconds=_max_late_seconds(max_late_seconds),
+            upstream_fn=(lambda: _upstream_cursor(tbl, camera_id, upstream_kind, summary)) if upstream_kind else None,
+            upstream_max_wait=upstream_max_wait_seconds(upstream_max_wait),
         )
     finally:
         kvs.clear_fragment_cache(stream)
@@ -256,6 +280,8 @@ def _loop(
     min_remaining_ms: int,
     watermark_fn: Callable[[datetime, datetime], int | None] | None,
     max_late_seconds: int,
+    upstream_fn: Callable[[], datetime | None] | None = None,
+    upstream_max_wait: int = UPSTREAM_MAX_WAIT_SECONDS,
 ) -> None:
     # 2. 処理対象: [cursor, target_end) を 1 分ずつ、最大 max_minutes 区間
     t_now = now()
@@ -266,12 +292,31 @@ def _loop(
     if watermark_fn is not None and cursor + MINUTE <= target_end:
         # カーソル以降の断片を 1 回で取る(process_minute の list_fragments はこの結果から返る)
         wm = watermark_fn(cursor, t_now + timedelta(seconds=WATERMARK_FUTURE_SECONDS))
+    upstream_until: datetime | None = None
+    if upstream_fn is not None and cursor + MINUTE <= target_end:
+        upstream_until = upstream_fn()
     budget_ms = 0  # これまでで最も長かった 1 区間の処理時間
     count = 0
     start = cursor
     while start + MINUTE <= target_end and count < max_minutes:
         end = start + MINUTE
-        if watermark_fn is not None:
+        upstream_done = False
+        if upstream_fn is not None:
+            # 上流(動画の退避)がこの区間を確定させたか。確定させていれば、上流がウォーターマークで判定済み
+            late_s = (to_utc(now()) - to_utc(end)).total_seconds()
+            if upstream_until is not None and upstream_until >= end:
+                upstream_done = True
+            elif late_s >= upstream_max_wait:
+                summary.setdefault("upstream_late", []).append(iso(start))
+                log("minute_upstream_late", camera_id=camera_id, kind=p, start=iso(start), late_seconds=int(late_s),
+                    upstream_until=iso(upstream_until) if upstream_until else None)
+            else:
+                summary["stopped"] = "waiting_upstream"
+                log("minute_waiting_upstream", camera_id=camera_id, kind=p, start=iso(start),
+                    upstream_until=iso(upstream_until) if upstream_until else None, late_seconds=int(late_s),
+                    upstream_max_wait_seconds=upstream_max_wait)
+                return
+        if watermark_fn is not None and not upstream_done:
             # 3. 区間の断片が出そろったか(ウォーターマーク)、待つ上限を過ぎたか
             late_s = (to_utc(now()) - to_utc(end)).total_seconds()
             if wm is not None and wm >= epoch_ms(end):
@@ -444,6 +489,14 @@ def _process_one(
     rec.update(status=result.status, duration_ms=duration_ms)
     log("minute_done", camera_id=camera_id, kind=p, start=sk, status=result.status, attempt=attempt, duration_ms=duration_ms, max_rss_mb=max_rss_mb())
     return rec
+
+
+def _upstream_cursor(tbl: Any, camera_id: str, upstream_kind: str, summary: dict) -> datetime | None:
+    """上流の処理済み位置(なければ None)。強い整合性で読む。"""
+    it = tbl.get_item(Key={"camera_id": camera_id, "sk": f"CURSOR#{upstream_kind}"}, ConsistentRead=True).get("Item")
+    v = parse_iso(it["processed_until"]) if it and it.get("processed_until") else None
+    summary["upstream_processed_until"] = iso(v) if v else None
+    return v
 
 
 def _iso_ms(ms: int | None) -> str | None:

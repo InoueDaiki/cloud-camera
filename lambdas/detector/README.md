@@ -3,9 +3,11 @@
 EventBridge Scheduler から 1 分ごとに `{"camera_id": "cam-001"}` で起動し、`lambdas/common` の `run_pipeline("DETECT", ...)` で
 処理済み位置から 1 分区間ずつ次を行う(構想.md「物体検出」「検出結果の保存」)。
 
-1. `kvs.minute_ready` で断片が出そろったかを確かめる(送信が遅れていれば `NotReady` で次の起動に回す)
-2. `handler.FRAME_SOURCE(camera_id, start, end)` でフレームを取る。既定の `frame_source.getimages` は ListFragments で録画の有無を見て、
-   あれば **GetImages で 1 秒間隔の JPEG(最大 60 枚、既定 640×360)** を取る。画像は S3 に置かない
+1. 動画の退避(video_archiver)がその区間を確定させるまで待つ。`run_pipeline(..., upstream_kind="VIDEO")` で、
+   **物体検出の処理済み位置は動画の退避の処理済み位置を越えない**([common の README「上流を待つ」](../common/README.md))
+2. `handler.FRAME_SOURCE(camera_id, start, end)` でフレームを取る。既定の `frame_source.clipfile` は区間の件の `video_status` を見て、
+   `DONE` なら **S3 の `clip.mp4` を GET し、キーフレーム(1 秒に 1 枚、最大 60 枚)を PyAV でデコードして幅 640(縦横比を保つ、16:9 なら 640×360)に縮める**。
+   `EMPTY` なら空、`FAILED` なら予備の経路(GetImages)。**GetImages は通常使わない**。画像は S3 に置かない
 3. メモリ上で前処理(レターボックス)→ ONNX Runtime(CPU)で推論 → クラスごとの NMS
 4. その日の Parquet(`detections/dt=YYYY-MM-DD/{camera_id}.parquet`)の **その 1 分の行を置き換える**(条件付き PUT)
 5. 区間の件に `detect_count`、`frame_count` を返す(`detect_status` などは共通処理が書く)
@@ -167,7 +169,7 @@ cd lambdas/detector
 mise exec -- uv sync
 ./fetch_models.sh                 # YOLOX の取得(SHA-256 確認)、キャリブレーション画像、*.dyn / *.int8 の作成
 mise exec -- uv run pytest        # 単体テスト
-./build.sh                        # → build/detector.zip(arm64)。SMOKE=1 で Lambda のベースイメージで import と推論を確認
+./build.sh                        # → build/detector.zip(arm64)。docker が要る(pyav_min)。SMOKE=1 で Lambda のベースイメージで import と推論を確認
 ```
 
 `build.sh` は Lambda 用の manylinux wheel(onnxruntime、numpy、pillow、pyarrow)を入れ、`lambdas/common` と
@@ -175,30 +177,53 @@ mise exec -- uv run pytest        # 単体テスト
 
 ### 環境変数
 
-Terraform と合意済み: `STATE_TABLE`、`DETECTIONS_BUCKET`、`STREAM_NAME_PREFIX`、`LAG_SECONDS`、`MAX_MINUTES`、`MAX_ATTEMPTS`、
+Terraform と合意済み: `STATE_TABLE`、`MEDIA_BUCKET`、`DETECTIONS_BUCKET`、`STREAM_NAME_PREFIX`、`FRAME_SOURCE`、`UPSTREAM_MAX_WAIT_SECONDS`、`LAG_SECONDS`、`MAX_MINUTES`、`MAX_ATTEMPTS`、
 `MEDIA_RETENTION_DAYS`。以下は省略可能(既定値で動く):
 
 | 変数 | 既定 | 内容 |
 | --- | --- | --- |
 | `DETECT_MODEL` | `yolox_tiny.int8s8` | `models/{DETECT_MODEL}.onnx`。zip に同梱したものから選ぶ |
-| `DETECT_INPUT_WIDTH` | `416` | GetImages で取る幅 = 推論の入力幅。高さは 32 の倍数に切り上げ(416 → 416×256) |
-| `DETECT_IMAGE_HEIGHT` | 幅 × 9/16 | GetImages で取る高さ(幅と高さは両方指定が必須)。16:9 以外のカメラで指定する |
+| `FRAME_SOURCE` | `clip` | `clip`(S3 の clip.mp4 をデコード)/ `getimages`(KVS GetImages、以前の方式) |
+| `MEDIA_BUCKET` | (`clip` では必須) | clip.mp4 を読むメディアバケット(Terraform が全 Lambda に渡している) |
+| `UPSTREAM_MAX_WAIT_SECONDS` | `1800` | `clip` のとき動画の退避を待つ上限(区間の終わりからの秒)。過ぎたら GetImages で取る |
+| `DETECT_INPUT_WIDTH` | `640` | デコード(または GetImages)で作る画像の幅 = 推論の入力幅。高さは 32 の倍数に切り上げ(640 → 640×384) |
+| `DETECT_IMAGE_HEIGHT` | `clip`: 縦横比を保つ / `getimages`: 幅 × 9/16 | 画像の高さ(GetImages は幅と高さの両方の指定が必須)。16:9 以外のカメラで指定する |
 | `DETECT_THREADS` | `0`(自動) | ONNX Runtime の intra-op スレッド数 |
 | `DETECT_BATCH` | `1` | 1 回の推論にまとめるフレーム数 |
 | `DETECT_SCORE_THRESHOLD` / `DETECT_NMS_THRESHOLD` | `0.3` / `0.45` | 信頼度の下限、NMS の IoU |
-| `MAX_WAIT_SECONDS` | `600` | 断片が出そろうのを待つ上限(`kvs.minute_ready`、video_archiver と共通) |
+| `MAX_LATE_SECONDS` | `720` | ウォーターマークを待つ上限(共通処理が読む。`clip` で動画の退避が確定させた区間には使わない) |
 
-## フレームの取り方の差し替え(`frame_source.py`)
+## フレームの取り方(`frame_source.py`)
 
-GetImages は 1 枚 $0.00001(1 台・月 約 $26)かかり、Lambda の費用より大きい。S3 の `clip.mp4` や KVS の HLS 断片を
-PyAV でデコードする実装に替えられるよう、取得を `FrameSource = (camera_id, start, end) -> FrameBatch` に切り出している。
+取得は `FrameSource = (camera_id, start, end) -> FrameBatch` に切り出してあり、環境変数 `FRAME_SOURCE` で選ぶ(`frame_source.select`)。
 
 - `FrameBatch.frames`: `[(フレームの時刻 UTC, 画像), ...]`(時刻順、`start ≤ ts < end`)。画像は JPEG / PNG の bytes、`PIL.Image`、
   HWC の RGB uint8 の numpy 配列のどれでもよい(`Detector.detect` が受け付ける)
-- `FrameBatch.stats`: ログ(`detect_minute`)にそのまま出す項目(GetImages 版は `fragments`、`image_errors`、`list_fragments_ms`、`get_images_ms`)
-- `handler.FRAME_SOURCE` を差し替える。`kvs.minute_ready`(断片が出そろったか)は handler 側で取得の前に呼ぶ
-- zip の余裕: 展開後 181 MB なので、上限 250 MB(262,144,000 バイト)まで **約 68 MB** 空いている。
-  PyAV(FFmpeg 同梱の manylinux wheel、数十 MB)は入る見込み。足りなければ pyarrow をさらに削るか、モデルを Nano にする(-4 MB)
+- `FrameBatch.stats`: ログ(`detect_minute`)にそのまま出す項目
+
+### `clip`(既定): S3 の clip.mp4 のキーフレーム
+
+GetImages(1 枚 $0.00001、1 台・月 約 $26)をやめ、動画の退避が S3 に置いた `clip.mp4` を読んでキーフレームだけをデコードする
+(`common.frames`、[lambdas/common/FRAMES.md](../common/FRAMES.md))。
+
+| 区間の件の `video_status` | 動き |
+| --- | --- |
+| `DONE` | `files.clip` を GET し、`hls.parts` と `segments` から各断片の開始時刻を求めて(`frames.anchors_from_hls`)キーフレームをデコード。壊れていたら GetImages で取り直す(`fallback: decode_error`) |
+| `EMPTY` | 録画なし。フレーム 0 枚(`detect_status = EMPTY`)。KVS も S3 も読まない |
+| `FAILED` | 動画の退避が失敗した区間だけ、予備の経路の **GetImages** で取る(`fallback: video_failed`)。費用は失敗した区間の分だけ |
+| なし | 動画の退避がまだ処理していない → `common.NotReady`(試行回数に数えず、次の起動で再挑戦)。区間の終わりから `UPSTREAM_MAX_WAIT_SECONDS` を過ぎていたら GetImages(`fallback: video_missing`) |
+
+- 通常は `run_pipeline` が動画の退避の処理済み位置(`CURSOR#VIDEO`)で止めるので、「なし」になるのは動画の退避が止まったときだけ
+- **フレームの時刻(Parquet の `ts`)は、その秒の枠に入るキーフレームの実際の時刻**(秒ちょうどではない。位相は送信開始時刻で決まり、送信ごとに一定。実 KVS の確認では毎秒 .634)。
+  GetImages 版(指定した時刻の直後のフレーム)より最大 1 秒後ろになる。`sprite.jpg` の同じ枠のコマと同じフレーム
+- 推論の入力は JPEG を通らない(デコードした絵を swscale で 640 に縮めたもの)ので、JPEG のデコードがなくなり、劣化も少ない
+- IAM: メディアバケットの `s3:GetObject`、状態テーブルの `dynamodb:GetItem`。予備の経路のために `kinesisvideo:ListFragments` / `GetImages` も残す
+
+### `getimages`: KVS の GetImages(以前の方式、`clip` の予備の経路)
+
+ListFragments で録画の有無を見て、あれば GetImages で 1 秒間隔の JPEG(既定 640×360)を取る。終わりの時刻を含む 61 枚が返るので 61 枚目は捨てる。
+範囲の始まりの近くに断片がないと `ResourceNotFoundException` になるので、そのときは録画がある範囲ごとに取り直す。
+`FRAME_SOURCE=getimages` のときは上流(動画の退避)を待たず、自分のウォーターマークで判定する。x86_64 の zip(pyav_min なし)はこちらで使う。
 
 ## Parquet への追記(`parquet_store.py`)
 
@@ -224,6 +249,7 @@ zstd 圧縮。実 KVS の通しでは、人と車が多い交差点の映像で 
 | 既知の画像で person | `tests/fixtures/person.jpg` を全モデル(Nano / Tiny、FP32 / INT8)、幅 416 / 320 で | person(信頼度 > 0.5、位置も確認)、dog / horse |
 | Parquet の冪等性 | `tests/test_parquet_store.py`(moto): 同じ区間の再実行で重複しない、検出 0 件の再実行で前回の行が消える、0 時またぎ(23:59 → 前日、00:00 → 翌日)、カメラ同士が干渉しない | OK |
 | 条件付き PUT の競合 | 読んでから書くまでに別の書き手が割り込む(If-Match / If-None-Match の両方)、上限回数で諦める。**実 S3** でも 412 `PreconditionFailed` → 読み直して両方の行が残ることを確認 | OK |
+| clip 版のフレーム源 | `tests/test_frame_source.py`(moto、PyAV でその場で作る H.265 の fMP4): キーフレームの時刻(秒ちょうどでない)、録画の切れ目、幅 640・縦横比、`video_status` なし → `NotReady` / 上限を過ぎたら GetImages、`EMPTY` → 空、`FAILED` と壊れた clip → GetImages、person の映る clip から Parquet まで(GetImages を呼ばない)、`upstream_kind` の受け渡し | OK |
 | process_minute | `tests/test_handler.py`: GetImages の 61 枚目(終わりの時刻)を落とす、MEDIA_ERROR を飛ばす、`NotReady`、ResourceNotFound のときに録画範囲で取り直す | OK |
 | zip | `SMOKE=1 ./build.sh`(Lambda のベースイメージで import・推論・Parquet) | arm64 / x86_64 とも OK |
 | 実 KVS で通し | エッジなしで、サンプル動画(1280×720、H.265、1 秒ごとのキーフレーム)を `tools/kvs_put_media.py`(PutMedia)で一時ストリームに送り、本番の zip を一時関数(arm64)にデプロイして `run_pipeline` ごと実行(`tools/lambda_e2e.py`) | 下記 |
@@ -236,16 +262,35 @@ zstd 圧縮。実 KVS の通しでは、人と車が多い交差点の映像で 
 - DynamoDB の区間の件に `detect_status`(DONE / EMPTY)、`detect_count`、`frame_count`、`detect_duration_ms`、`detect_attempts` が入り、処理済み位置が進んだ。送信直後の区間は `minute_ready` で `not_ready` になり、送信が止まって 45 秒後に処理された
 - Parquet は `detections/dt=2026-10-24/h265.parquet` に追記され、person / car / traffic light などが入った
 
+### 実 KVS での確認(clip 版、2026-10-24)
+
+`emulator/` のサンプル動画(`crosswalk_toronto.mp4`、H.265 1280×720 15fps、約 1 Mbps)を `lambdas/video_archiver/testing/kvssink` の送信コンテナで
+一時 KVS ストリームに送り、`build.sh` で作った video_archiver と detector の zip を一時 Lambda(arm64)で毎分 1 回、video_archiver → detector の順に動かした。
+一時関数の IAM には GetImages の権限を付けていない。
+
+| 関数 | メモリ | Duration(REPORT、ウォーム) | Max Memory Used | 1 区間の内訳 |
+| --- | ---: | ---: | ---: | --- |
+| detector(yolox_tiny INT8 @640) | 1,024 MB | 9.4〜9.6 秒 | 531〜545 MB | 取得 1.32 秒(GetItem 6 ms + S3 GET 92 ms + デコード 0.60 秒 + 縮小 0.62 秒)、前処理 0.28 秒、推論 7.5 秒(125 ms / 枚)、NMS 0.22 秒、Parquet 0.13 秒 |
+
+- 1 区間 60 フレーム(デコードの失敗 0、640×360)。person を含む 1 分 1,630〜1,684 件(6 分で person 5,018 件、car 1,319 件 など)
+- Parquet の `ts` は毎秒 .634(キーフレームの実際の時刻)。sprite.jpg の同じ枠のコマと同じフレーム
+- GetImages の呼び出し 0 回(CloudWatch `GetImages.Requests` なし、AccessDenied のログなし)
+- 以前の GetImages 版(1,024 MB、@640)は取得 1.9 秒で 1 区間 10.3 秒。clip 版は取得が 1.3 秒になり、JPEG のデコードもなくなった
+- 待ち合わせ: video_archiver より先に detector を呼ぶと `stopped: waiting_upstream`(区間の件を作らない、117 ms)。video_archiver が進めた後の起動で処理した
+- 最大メモリは Parquet(その日の行)が増えるにつれて少しずつ増える(531 → 545 MB)
+
 ## ログ(1 行 1 JSON、`common.log`)
 
-区間ごとに `detect_minute` を出す。主な項目: `frame_count`、`detect_count`、`image_errors`(GetImages の `MEDIA_ERROR` などの数)、
-`fetch_ms`(ListFragments + GetImages)、`preprocess_ms`、`inference_ms`、`inference_ms_per_frame`、`postprocess_ms`、
+区間ごとに `detect_minute` を出す。主な項目: `frame_count`、`detect_count`、`source`(`clip` / `getimages`)、`fallback`(予備の経路にした理由)、
+clip のとき `video_status`、`clip_bytes`、`get_item_ms`、`s3_get_ms`、`decode_ms`、`scale_ms`、`decoded`、`decode_lost`、`image_size`、
+getimages のとき `image_errors`(GetImages の `MEDIA_ERROR` などの数)、`fetch_ms`(フレームの取得全体)、`preprocess_ms`、`inference_ms`、`inference_ms_per_frame`、`postprocess_ms`、
 `write_read_ms` / `write_put_ms` / `write_attempts`(Parquet の読み書き)、`parquet_rows`、`parquet_bytes`、`total_ms`、`max_rss_mb`。
 コールドスタートで `model_loaded`(`load_ms`)、競合時に `parquet_conflict`。
 
 ## zip のサイズ
 
-`build/detector.zip`(arm64、既定のモデル 1 つ)は **zip 64 MB、展開後 181 MB**(上限 250 MB)。50 MB を超えるので Terraform は S3 経由でデプロイする。
+`build/detector.zip`(arm64、既定のモデル 1 つ)は **zip 67 MB、展開後 190 MB**(上限 250 MB。zip の中のファイルの大きさの合計。`build.sh` が超えていないか確かめる)。
+50 MB を超えるので Terraform は S3 経由でデプロイする。PyPI の av の wheel(展開後 91 MB)を入れると 250 MB を超えるので、最小構成の PyAV(`lambdas/common/pyav_min`)を入れる。
 
 | 中身 | 展開後 | 備考 |
 | --- | ---: | --- |
@@ -254,12 +299,14 @@ zstd 圧縮。実 KVS の通しでは、人と車が多い交差点の映像で 
 | numpy + numpy.libs(OpenBLAS) | 43.1 MB | テスト、f2py、ヘッダーを削除。`*.libs` は auditwheel が patchelf 済みで、strip すると読み込めない(page-aligned エラー) |
 | Pillow + pillow.libs | 9.3 MB | AVIF / WebP / FreeType / LCMS を削除(JPEG のデコードとリサイズだけ使う) |
 | models | 5.1 MB | `yolox_tiny.int8s8.onnx` |
+| av + lib(pyav_min) | 15.2 MB | PyAV 19.0.2 + FFmpeg 8.1(LGPL、HEVC / H.264 のデコーダと mov のデマクサー、swscale だけ)。docker でビルドし、`build/.cache/pyav_min/` にキャッシュ(2 回目からは docker を使わない) |
 | 本体 + common + その他 | 約 1 MB | |
 
 - 依存は合計で削る前 279 MB → 176 MB。x86_64 版は onnxruntime が 59 MB と大きく、展開後 約 190 MB。
 - AWS SDK for pandas のマネージドレイヤー(`AWSSDKPandas-Python313-Arm64:8`)は展開後 161 MB(pyarrow 20、pandas、numpy など)。
   onnxruntime と Pillow を足すと約 230 MB で収まるが、自前で削った方が 50 MB 小さく、numpy の版も自分で決められるので使っていない。
-- `SMOKE=1 ./build.sh` で Lambda のベースイメージ(`public.ecr.aws/lambda/python:3.13-arm64`)に展開物を載せ、import・推論・Parquet の読み書きを確かめる。
+- `SMOKE=1 ./build.sh` で Lambda のベースイメージ(`public.ecr.aws/lambda/python:3.13-arm64`)に展開物を載せ、import・推論・Parquet の読み書き、
+  PyAV(`/var/task/lib` の FFmpeg が読めて HEVC / H.264 のデコーダがあること)を確かめる。
 
 ## ベンチマークと検証のツール(`tools/`)
 

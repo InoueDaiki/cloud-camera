@@ -453,10 +453,12 @@ def to_lines(raw: dict[str, Any], opt: MeasureOptions | None = None) -> tuple[li
     images = float(kvs.get("images_lowres", 0))
     det_frames = float(dmin.get("frame_count", 0))
     det_done = float((dmin.get("statuses") or {}).get("detect_status:DONE", 0))
-    # 検出の GetImages は区間の終わりの 1 枚も返す(推論しないが課金される)ので、DONE の区間ごとに 1 枚足す
+    # 検出の GetImages は区間の終わりの 1 枚も返す(推論しないが課金される)ので、DONE の区間ごとに 1 枚足す。
+    # B 案(既定)では動画の退避も検出も GetImages を使わない(検出は動画の退避が FAILED の区間だけ予備の経路で使う)ので、
+    # 実測の枚数(CloudWatch)があれば、それを上限にする(実測が 0 なら検出の分も 0)
     det_images = det_frames + det_done if det_frames else 0.0
-    if images and det_images > images:
-        det_images = images
+    if "images_lowres" in kvs:
+        det_images = min(det_images, images)
     sprite_images = max(images - det_images, 0)
     L.append(Line("動画抽出", "KVS GetImages(スプライト)", "kvs.getimages_lowres", per_cam(sprite_images), "camera", "実測",
                   "GetImages.LowRes.ImagesCount − 検出の分(frame_count + DONE の区間数)"))
@@ -490,7 +492,7 @@ def to_lines(raw: dict[str, Any], opt: MeasureOptions | None = None) -> tuple[li
     # --- 物体検出 ---
     if det_frames or "detector" in lam:
         L.append(Line("物体検出", "KVS GetImages(推論用)", "kvs.getimages_lowres", per_cam(det_images), "camera", "推定",
-                      "DynamoDB の frame_count 合計 + DONE の区間数(区間の終わりの 1 枚)"))
+                      "DynamoDB の frame_count 合計 + DONE の区間数(区間の終わりの 1 枚)。実測の GetImages の枚数が上限"))
         lambda_lines("物体検出", "detector", "detector")
         if "detector" in lam:
             L.append(Line("物体検出", "EventBridge Scheduler(検出)", "scheduler.invocations",

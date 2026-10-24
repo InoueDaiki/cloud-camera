@@ -6,13 +6,16 @@
 
 ## 同梱のしかた
 
-このディレクトリをそのまま zip の直下に `common/` として入れる(`tests/`、`pyproject.toml`、`.venv/` などは除く)。
+このディレクトリをそのまま zip の直下に `common/` として入れる(`tests/`、`pyproject.toml`、`.venv/`、`pyav_min/` などは除く)。
 依存は boto3 だけで、Lambda のランタイムに入っているものを使う。
+`frames.py`(キーフレームのデコード)を使う Lambda(video_archiver、detector)は、PyAV と Pillow も zip に入れる。
+PyAV は `pyav_min/build.sh "$STAGE"` で最小構成の FFmpeg ごと入れる(docker でビルドし、`build/.cache/pyav_min/` にキャッシュ。[FRAMES.md](FRAMES.md))。
 
 ```sh
 # build.sh の例
+bash lambdas/common/pyav_min/build.sh "$STAGE"     # av/、lib/(frames.py を使う場合)
 rsync -a --exclude tests --exclude .venv --exclude '__pycache__' --exclude pyproject.toml \
-  --exclude uv.lock --exclude README.md lambdas/common/ "$STAGE/common/"
+  --exclude uv.lock --exclude README.md --exclude FRAMES.md --exclude pyav_min lambdas/common/ "$STAGE/common/"
 ```
 
 ## 使い方
@@ -55,6 +58,8 @@ def lambda_handler(event, context):
 | `stream_name` | KVS のストリーム名(省略時は `kvs.stream_name_for(camera_id)`、つまり `STREAM_NAME_PREFIX` + カメラ ID) |
 | `list_fragments` | `kvs.list_fragments` の差し替え(テスト用) |
 | `use_watermark` | `False` ならウォーターマークを見ない(KVS を使わない単体テスト用。本番では使わない) |
+| `upstream_kind` | 上流の種類(物体検出なら `"VIDEO"`)。上流の処理済み位置を越えて処理しない(下の「上流を待つ」) |
+| `upstream_max_wait` | 上流を待つ上限(秒、区間の終わりから)。省略時は環境変数 `UPSTREAM_MAX_WAIT_SECONDS`、既定 1800 |
 
 ## ウォーターマーク(区間を処理してよいか)
 
@@ -83,6 +88,30 @@ KVS の料金表にはリクエスト単位の項目がなく(取り出しは GB
   その間の区間はビューワーが KVS(保持 1 時間)から再生する。停止が続けば、`MAX_LATE_SECONDS` 遅れで `EMPTY` が確定していく
 - ListFragments に失敗したらウォーターマークは不明(`watermark_error`)として待つ。続けば (b) で進む
 - 前提はエッジの送信が時刻順であること(kvssink の動作)。時刻を戻すと、戻った分は確定済みの区間に入って捨てられる
+
+## 上流を待つ(物体検出が動画の退避の clip.mp4 を読む)
+
+物体検出は、動画の退避が S3 に置いた `clip.mp4` からキーフレームをデコードする([FRAMES.md](FRAMES.md))。
+そのため物体検出(DETECT)は `upstream_kind="VIDEO"` で動かし、**物体検出の処理済み位置は動画の退避の処理済み位置を越えない**ようにする。
+
+- 起動ごとに 1 回(処理する区間があるときだけ)、`CURSOR#VIDEO` の `processed_until` を強い整合性で読む(GetItem 1 回)
+- 区間 [s, e) は、**動画の処理済み位置 ≥ e** のときだけ処理する。満たさなければそこで止める
+  (`pipeline_done` の `stopped` は `waiting_upstream`。区間の件は作らず、試行回数にも数えない。ウォーターマーク待ちと同じ扱い)
+- 動画の処理済み位置 ≥ e なら、**自分のウォーターマークは見ない**。動画の退避がウォーターマーク(または `MAX_LATE_SECONDS`)で
+  判定して確定させた区間なので、clip.mp4 と同じ断片の集合で検出する(動画が `MAX_LATE_SECONDS` で確定させた区間に、後から届いた断片は
+  動画にも検出にも入らない。両者が食い違わない)
+- 動画の退避が止まって、区間の終わりから `upstream_max_wait`(既定 1800 秒)を過ぎても処理済み位置が進まないときだけ、
+  上流を待たずに自分のウォーターマークで判定して処理する(`minute_upstream_late`)。process_minute は区間の件に `video_status` が
+  ないのを見て、予備の経路(GetImages)で取る。1800 秒は、動画の退避のウォーターマーク待ちの上限(720 秒)+ lag より長く、
+  KVS の保持期間(1 時間)より十分前(予備の経路で KVS から読める時間を残す)
+- 区間の件の `video_status` の扱いは process_minute(detector の `frame_source.clipfile`)が決める:
+  `DONE` → clip.mp4、`EMPTY` → 空、`FAILED` → 予備の経路、なし → `NotReady`(上の判定を通ったあとで件がない、というずれへの保険)
+
+書く順序は「動画の退避: S3 → 区間の件(`video_status`)→ `CURSOR#VIDEO`」なので、動画の処理済み位置 ≥ e なら、
+その区間の `video_status`(`DONE` なら S3 の clip.mp4 も)は必ずある。例外は、動画の退避のカーソルの初期値(初回起動時の「現在 − lag − 5 分」)
+より前の区間で、件が作られない。物体検出のカーソルの方が古いとこの区間で `NotReady` が続き、`upstream_max_wait` を過ぎてから予備の経路で処理される。
+
+遅れ: 物体検出は、動画の退避が区間を確定させた後の起動で処理する。同じ 1 分ごとのスケジュールなら、動画の退避より 0〜1 分遅れる。
 
 ## 再送による重複
 
@@ -143,7 +172,8 @@ lag 30 秒のまま処理した区間は 60 本中 42 本しか入らなかっ�
 
 `common.log(event, **fields)` で 1 行 1 JSON を標準出力に出す。共通処理は `minute_done` / `minute_retry` / `minute_not_ready` / `minute_failed` / `minute_waiting`(ウォーターマーク待ち)/
 `minute_max_late`(待つ上限を過ぎて確定)/ `watermark_error` / `pipeline_done` / `lease_busy` などを出す。
-`pipeline_done` の `stopped` は `caught_up` / `max_minutes` / `time` / `retry` / `not_ready` / `waiting` / `lease_lost`。
+`pipeline_done` の `stopped` は `caught_up` / `max_minutes` / `time` / `retry` / `not_ready` / `waiting` / `waiting_upstream` / `lease_lost`。
+上流を待つときは `minute_waiting_upstream`、待つ上限を過ぎて上流なしで処理するときは `minute_upstream_late` も出る(`pipeline_done` に `upstream_processed_until`、`upstream_late`)。
 `pipeline_done` には `watermark`(ISO、ミリ秒付き)と `watermark_fragments`(取った断片の数)、`max_late`(上限で確定した区間)も入る。
 
 ## テスト
@@ -155,3 +185,5 @@ mise exec -- uv run pytest
 ```
 
 DynamoDB は moto、KVS は botocore の Stubber で差し替えている(実 AWS には接続しない)。
+`tests/test_frames.py` は PyAV が要る(`uv run --with av --with pillow --with numpy pytest`、FRAMES.md)。なければ skip される。
+テスト用の H.265 fMP4 を作る `tests/media.py` は、video_archiver と detector のテストからも `common.tests.media` として使う。

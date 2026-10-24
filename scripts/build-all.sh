@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Lambda の zip(build/<name>.zip)とビューワー(viewer/dist)をまとめてビルドする。
 # 存在するものだけ実行する。
+# video_archiver と detector は最小構成の PyAV(lambdas/common/pyav_min)を docker でビルドして入れるので docker が要る
+# (初回のみ FFmpeg のコンパイルで数分。2 回目からは build/.cache/pyav_min のキャッシュを使い、docker を呼ばない)。
 #
 # 使い方: scripts/build-all.sh
 set -euo pipefail

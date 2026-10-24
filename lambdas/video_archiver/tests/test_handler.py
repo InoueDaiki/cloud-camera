@@ -74,7 +74,8 @@ def test_handler_end_to_end(env, monkeypatch):
     def cb(stream, start, end, frags):
         return Clip(b"I" * 4 + b"F" * 2 * len(frags), 4, [[4 + 2 * i, 2, 1000] for i in range(len(frags))], frags)
 
-    arch = archiver.Archiver(bucket="media", clip_builder=cb, get_images=lambda *a, **k: [])
+    arch = archiver.Archiver(bucket="media", clip_builder=cb,
+                             sprite_builder=lambda c, s, e: archiver.Sprite(b"J", 0))
     handler._archiver = arch
 
     res = handler.lambda_handler({"camera_id": "cam-001"}, Ctx())

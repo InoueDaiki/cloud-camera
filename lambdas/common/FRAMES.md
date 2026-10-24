@@ -4,7 +4,8 @@ KVS GetImages(1 枚 $0.00001)はスプライト用と検出用で 1 分 61 枚�
 ([tools/cost/README.md](../../tools/cost/README.md))。案 B では GetImages を使わず、手元にある fMP4(HLS の init + 断片、
 S3 の `clip.mp4`)から **キーフレーム(1 秒に 1 枚)だけ** を PyAV でデコードする。
 
-この文書には、試作した `frames.py`、計測の結果、費用の比較、ハンドラーへの組み込み方の案を書く。**ハンドラーへの組み込みはまだしていない。**
+この文書には、`frames.py`、計測の結果、費用の比較、ハンドラーへの組み込みを書く。
+**B 案を採用し、video_archiver と detector に組み込んだ**(下の「ハンドラーへの組み込み」と「組み込み後の実 KVS での確認」)。
 
 ## 結論
 
@@ -200,7 +201,9 @@ tools/cost の机上計算の合計(約 $100)から見ると、B 案(S3)で約 $
   video_archiver の処理済み位置が KVS の保持期限(1 時間)に近づくまで遅れていたら、HLS か GetImages に切り替える
 - `video_status = FAILED` の区間だけ、HLS(または GetImages)で取る。費用は失敗した区間の分だけ
 
-## ハンドラーへの組み込み方(案)
+## ハンドラーへの組み込み
+
+実装済み。以下は組み込んだときの方針(コードは `lambdas/video_archiver/archiver.py` の `build_sprite`、`lambdas/detector/frame_source.py` の `clipfile`)。
 
 ### video_archiver
 
@@ -219,12 +222,14 @@ sprite, sprite_frames = frames.build_sprite(r.frames, "sprite")
 - 例外(壊れた断片など)はスプライトだけの失敗にして、今と同じく `sprite_error` に残して `DONE` にする
 - 区間の頭の秒(10:20:00 の枠)は、その秒に始まる断片のキーフレームが入る。前の区間の断片から続く部分は使わない(今の GetImages は、前の区間の断片から 10:20:00 の絵が取れていた)
 - `build.sh`: `lambdas/common/pyav_min/build.sh "$STAGE"` を足す(Pillow はそのまま)。`common/` の rsync で `pyav_min`、`FRAMES.md` も除く
-- IAM: `kinesisvideo:GetImages` が要らなくなる。メモリは 512 MB のまま(256 MB はデコードでメモリの上限に張り付く)。タイムアウト 60 秒で足りる(1 区間 3〜4 秒、1080p で 7 秒)
+- IAM: `kinesisvideo:GetImages` が要らなくなる(infra から外した)。メモリは 512 MB のまま。タイムアウト 60 秒で足りる(1 区間 3〜4 秒、1080p で 7 秒)
 - ログ: `r.stats`(`decode_ms`、`scale_ms`、`decoded` など)を `minute_metrics` に入れる
 
 ### detector
 
-`frame_source.py` に `clipfile(camera_id, start, end) -> FrameBatch` を足し、`handler.FRAME_SOURCE` を差し替える(環境変数 `FRAME_SOURCE=clip|getimages` で選ぶ)。
+`frame_source.py` に `clipfile(camera_id, start, end) -> FrameBatch` を足し、`handler.FRAME_SOURCE` の既定にした(環境変数 `FRAME_SOURCE=clip|getimages` で選ぶ)。
+待ち合わせ: `run_pipeline(..., upstream_kind="VIDEO")` で、物体検出の処理済み位置は動画の退避の処理済み位置を越えない([README.md の「上流を待つ」](README.md))。
+下のコードは方針を示す簡略版(実際は、動画の退避が `UPSTREAM_MAX_WAIT_SECONDS` を過ぎても進まないときと、デコードに失敗したときも GetImages に切り替える)。
 
 ```python
 def clipfile(camera_id, start, end):
@@ -246,9 +251,34 @@ def clipfile(camera_id, start, end):
 
 - DynamoDB の数値は Decimal で返るので、`anchors_from_hls` の中で int に直している
 - `detect.Detector.detect` は PIL.Image を受け付けるので、JPEG のデコードがなくなる
-- `build.sh`: `pyav_min/build.sh "$STAGE"` を足す(展開後 197 MB)。PyPI の av を `pyproject.toml` に足すと 250 MB を超える
+- `build.sh`: `pyav_min/build.sh "$STAGE"` を足す(展開後 190 MB。zip の中のファイルの大きさの合計。du では 197 MB)。PyPI の av を `pyproject.toml` の実行時の依存に足すと 250 MB を超える(テストでは dev の依存として使う)
 - IAM: `s3:GetObject`(メディアバケット)、`dynamodb:GetItem`(状態テーブル)。`FAILED` の代替に GetImages を残すなら、今の KVS の権限もそのまま
-- 環境変数: `MEDIA_BUCKET` を足す
+- 環境変数: `MEDIA_BUCKET`(Terraform は全 Lambda に渡している)、`FRAME_SOURCE`(既定 `clip`)、`UPSTREAM_MAX_WAIT_SECONDS`(既定 1800)
+
+### build(pyav_min のキャッシュ)
+
+`pyav_min/build.sh <stage>` は、出力(`av/`、`av-*.dist-info/`、`lib/`)を `build/.cache/pyav_min/<Dockerfile と build.sh のハッシュ>/` に置き、
+2 回目からは docker を使わずにコピーするだけ(0.1 秒未満)。キャッシュがなければ docker でビルドする(docker のレイヤーキャッシュがあれば数秒、
+なければ FFmpeg のコンパイルで数分)。Dockerfile の版や configure を変えるとハッシュが変わって作り直す。`PYAV_MIN_REBUILD=1` で強制的に作り直す。
+`scripts/build-all.sh` は各 `lambdas/*/build.sh` を呼ぶので、そのまま通る(docker が要る)。
+
+## 組み込み後の実 KVS での確認(2026-10-24)
+
+`emulator/` のサンプル動画(`crosswalk_toronto.mp4`、H.265 1280×720 15fps、キーフレーム 1 秒、約 1 Mbps)を
+`lambdas/video_archiver/testing/kvssink` の送信コンテナで一時 KVS ストリーム `cc-tmp-binteg-cam-001` に送り、
+`build.sh` で作った zip(video_archiver 展開後 34 MB、detector 展開後 190 MB)を一時 Lambda(arm64)で毎分 1 回、video_archiver → detector の順に動かした。
+一時関数の IAM には GetImages の権限を付けていない。
+
+| 関数 | メモリ | 1 起動 = 1 区間の Duration(ウォーム) | Max Memory Used | うちフレーム |
+| --- | ---: | ---: | ---: | --- |
+| video_archiver | 512 MB | 3.25〜3.37 秒 | 163〜169 MB | スプライト 2.06 秒(デコード 0.98 + 縮小 1.03) |
+| detector | 1,024 MB | 9.4〜9.6 秒 | 531〜545 MB | 取得 1.32 秒(S3 GET 0.09 + デコード 0.60 + 縮小 0.62)。残りは推論 7.5 秒など |
+
+- sprite.jpg は 60 コマ(約 255 KB)、clip.mp4 は ffprobe で 900 フレーム。Parquet には person など 1 分 1,600 件台
+- `ts` とスプライトのコマは毎秒 .634(この送信のキーフレームの位相)
+- GetImages の呼び出し 0 回(CloudWatch の `GetImages.Requests` なし)
+- 縮小(swscale の AREA で 1280×720 → 160×90 / 640×360)が 512 MB で 1 秒かかっている。費用は 1 台・月 $0.3 程度なので、そのままにしている
+- 一時リソース(KVS ストリーム、DynamoDB、S3 2 つ、IAM ロール、Lambda 2 本とロググループ、docker のコンテナ・ネットワーク・イメージ)はすべて削除した
 
 ## ライセンス
 

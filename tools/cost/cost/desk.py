@@ -1,7 +1,9 @@
 """机上計算: ビットレートや検出頻度などの前提から、実測と同じ明細を作る(実測の検算と条件の比較用)。
 
 既定値の出典:
-- video_archiver の実行時間・メモリ・ファイルサイズ: lambdas/video_archiver/README.md の実測(0.6 Mbps、2026-10-24)
+- video_archiver の実行時間・メモリ・ファイルサイズ: lambdas/video_archiver/README.md の実測(B 案: clip.mp4 のキーフレームから
+  スプライトを作る。GetImages なし。サンプル動画 約 1 Mbps、2026-10-24)
+- detector の実行時間: lambdas/detector/README.md の実測(B 案: S3 の clip.mp4 をデコード、yolox_tiny INT8 @640、1,024 MB)
 - DynamoDB の書き込み回数: lambdas/common/pipeline.py の UpdateItem の数(起動ごとにリース取得と解放、区間ごとに試行回数・結果・カーソル)
 - エッジの死活とシャドウ: docs/contracts.md(30 秒ごとの status と reported の更新)
 - 検出結果の行の大きさ: 構想.md「検出結果の保存」(1 日約 17 万行で 3〜5 MB → 1 行約 25 バイト)
@@ -28,19 +30,25 @@ class DeskParams:
     # 動画の退避(video_archiver)
     archiver_memory_mb: int = 512
     archiver_ephemeral_mb: int = 1024
-    archiver_duration_s: float = 1.9  # 1 区間(録画あり)あたり
+    archiver_duration_s: float = 3.2  # 1 区間(録画あり)あたり。B 案(キーフレームのデコード込み、512 MB の実測 3.1〜3.4 秒)
     archiver_empty_duration_s: float = 0.05  # 録画なしの区間
-    sprite_images_per_minute: int = 61  # GetImages は [start, end] の両端を含むので 61 枚返る(README の実測)
-    sprite_kb: float = 80.0
+    # スプライト用の GetImages の枚数 / 分。B 案は 0(clip.mp4 のキーフレームをデコードする)。
+    # 以前の方式(GetImages、[start, end] の両端を含むので 61 枚)を試算するときは 61、archiver_duration_s 1.9
+    sprite_images_per_minute: int = 0
+    sprite_kb: float = 250.0  # キーフレームからのスプライト(JPEG を通さない分、GetImages 版の 80 KB より大きい。B 案の実測)
     playlist_kb: float = 3.5
     s3_puts_per_minute: int = 3  # clip.mp4、sprite.jpg、index.m3u8
     # 物体検出(detector)
     detect_interval_s: float = 1.0  # 何秒おきに 1 枚推論するか
-    detect_images_extra: int = 1  # GetImages は区間の終わりの 1 枚も返す(課金される。推論には使わない)
-    detector_memory_mb: int = 3008
+    # フレーム源: clip(B 案。S3 の clip.mp4 をデコード。GetImages なし)/ getimages(以前の方式)
+    detector_frame_source: str = "clip"
+    detect_images_extra: int = 1  # getimages のとき: GetImages は区間の終わりの 1 枚も返す(課金される。推論には使わない)
+    detector_memory_mb: int = 1024  # infra の既定(locals.tf)
     detector_ephemeral_mb: int = 1024
-    detector_overhead_s: float = 2.0  # 1 区間あたりの推論以外(GetImages、Parquet の読み書き)
-    detector_sec_per_frame: float = 0.25  # 1 枚の推論時間(仮定。メモリを変えて実測する)
+    # 1 区間あたりの推論以外。clip: GetItem + S3 GET + キーフレームのデコード + Parquet の読み書き(B 案の実測)。
+    # getimages なら ListFragments + GetImages + Parquet で約 2.0
+    detector_overhead_s: float = 1.5
+    detector_sec_per_frame: float = 0.135  # 1 枚の前処理 + 推論 + NMS(yolox_tiny INT8 @640、1,024 MB の実測)
     detections_per_frame: float = 2.0
     detection_row_bytes: float = 25.0  # Parquet 圧縮後の 1 行
     detections_retention_days: float | None = None  # 現行バージョンの期限はない。None なら media_retention_days と同じとみなす
@@ -112,9 +120,10 @@ def build_lines(p: DeskParams) -> list[Line]:
     # --- 動画抽出(video_archiver) ---
     L.append(Line("動画抽出", "KVS HLS 取り出し(clip.mp4 用)", "kvs.hls_out_gb", ingest_bytes / GB, "camera", src,
                   "取り込んだ断片をすべて 1 回取り出す"))
-    sprite_images = p.sprite_images_per_minute * rec_minutes
-    L.append(Line("動画抽出", "KVS GetImages(スプライト)", "kvs.getimages_lowres", sprite_images, "camera", src,
-                  f"{p.sprite_images_per_minute} 枚 / 分"))
+    if p.sprite_images_per_minute:
+        sprite_images = p.sprite_images_per_minute * rec_minutes
+        L.append(Line("動画抽出", "KVS GetImages(スプライト)", "kvs.getimages_lowres", sprite_images, "camera", src,
+                      f"{p.sprite_images_per_minute} 枚 / 分"))
     arch_ms = (p.archiver_duration_s * rec_minutes + p.archiver_empty_duration_s * (minutes - rec_minutes)) * 1000
     lam("動画抽出", "video_archiver", p.archiver_memory_mb, p.archiver_ephemeral_mb, arch_ms, minutes,
         minutes * p.log_bytes_per_invocation, f"{p.archiver_memory_mb} MB × {p.archiver_duration_s} 秒 / 分")
@@ -137,9 +146,17 @@ def build_lines(p: DeskParams) -> list[Line]:
     # --- 物体検出(detector) ---
     frames_per_min = 60 / p.detect_interval_s if p.detect_interval_s > 0 else 0
     if frames_per_min:
-        imgs = frames_per_min + p.detect_images_extra
-        L.append(Line("物体検出", "KVS GetImages(推論用)", "kvs.getimages_lowres", imgs * rec_minutes, "camera",
-                      src, f"{imgs:g} 枚 / 分(推論 {frames_per_min:g} 枚 + 区間の終わりの 1 枚)"))
+        if p.detector_frame_source == "getimages":
+            imgs = frames_per_min + p.detect_images_extra
+            L.append(Line("物体検出", "KVS GetImages(推論用)", "kvs.getimages_lowres", imgs * rec_minutes, "camera",
+                          src, f"{imgs:g} 枚 / 分(推論 {frames_per_min:g} 枚 + 区間の終わりの 1 枚)"))
+        elif p.detector_frame_source == "clip":
+            # 動画の退避が置いた clip.mp4 を 1 区間 1 回 GET(S3 内の転送は無料)。区間の件と CURSOR#VIDEO を強い整合性で読む
+            L.append(Line("物体検出", "S3 GET(clip.mp4)", "s3.get", rec_minutes, "camera", src, "1 分 1 回"))
+            L.append(Line("物体検出", "DynamoDB 読み込み(区間の件、CURSOR#VIDEO)", "dynamodb.rru", minutes * 2, "camera", src,
+                          "1 分あたり 2 RRU(強い整合性、4 KB 以下)"))
+        else:
+            raise ValueError(f"detector_frame_source は clip か getimages: {p.detector_frame_source!r}")
         det_ms = (p.detector_overhead_s + frames_per_min * p.detector_sec_per_frame) * rec_minutes * 1000
         det_ms += p.archiver_empty_duration_s * (minutes - rec_minutes) * 1000
         lam("物体検出", "detector", p.detector_memory_mb, p.detector_ephemeral_mb, det_ms, minutes,

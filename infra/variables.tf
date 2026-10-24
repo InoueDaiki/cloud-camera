@@ -54,6 +54,22 @@ variable "lag_seconds" {
   default     = 45
 }
 
+variable "detector_frame_source" {
+  description = "物体検出のフレーム源。clip = 動画の退避の clip.mp4 のキーフレームをデコード(GetImages を使わない)、getimages = KVS GetImages"
+  type        = string
+  default     = "clip"
+  validation {
+    condition     = contains(["clip", "getimages"], var.detector_frame_source)
+    error_message = "detector_frame_source は clip か getimages。"
+  }
+}
+
+variable "detector_upstream_max_wait_seconds" {
+  description = "clip のとき、物体検出が動画の退避を待つ上限(区間の終わりからの秒)。過ぎたら GetImages で取る。KVS の保持期間(1 時間)より十分短くする"
+  type        = number
+  default     = 1800
+}
+
 variable "max_minutes" {
   description = "1 回の起動で処理する区間数の上限"
   type        = number

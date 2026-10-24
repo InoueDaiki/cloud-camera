@@ -25,10 +25,13 @@ def env(monkeypatch):
     monkeypatch.setenv("DETECTIONS_BUCKET", BUCKET)
     monkeypatch.setenv("STREAM_NAME_PREFIX", "cc-test-")
     monkeypatch.setenv("DETECT_MODEL", "yolox_nano.dyn")
+    import frame_source
     import handler
 
     handler._detector = None
     handler._s3 = None
+    # このファイルは GetImages の経路(FRAME_SOURCE=getimages、clip の予備の経路)を確かめる
+    monkeypatch.setattr(handler, "FRAME_SOURCE", frame_source.getimages)
     with mock_aws():
         s3 = boto3.client("s3", region_name="ap-northeast-1")
         s3.create_bucket(Bucket=BUCKET, CreateBucketConfiguration={"LocationConstraint": "ap-northeast-1"})

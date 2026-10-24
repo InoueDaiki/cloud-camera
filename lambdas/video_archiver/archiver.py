@@ -4,7 +4,8 @@
 - 断片の一覧: ListFragments(プロデューサー時刻)。開始時刻が区間内の断片をその区間に割り当てる
 - 動画: HLS ON_DEMAND(fMP4)セッションの init と断片をそのまま連結した fMP4。ffmpeg を使わない
 - プレイリスト: clip.mp4 を EXT-X-BYTERANGE で参照する HLS(fMP4)
-- スプライト: GetImages(1 秒間隔、160×90)を Pillow で 10×6 のシートにする
+- スプライト: 作った clip.mp4 のキーフレーム(1 秒に 1 枚)を PyAV でデコードし、160×90 に縮めて 10×6 のシートにする
+  (`common.frames`。GetImages は使わない。lambdas/common/FRAMES.md)
 """
 
 from __future__ import annotations
@@ -22,14 +23,13 @@ from typing import Any, Callable
 
 import boto3
 
-from common import MinuteResult, kvs, log, max_rss_mb
+from common import MinuteResult, frames, kvs, log, max_rss_mb
 from common.timeutil import epoch_ms, from_epoch_ms, media_prefix, to_utc
 
 GAP_MS = 500
-SPRITE_COLS, SPRITE_ROWS = 10, 6
-THUMB_W, THUMB_H = 160, 90
+SPRITE_COLS, SPRITE_ROWS = frames.SPRITE_COLS, frames.SPRITE_ROWS
+THUMB_W, THUMB_H = frames.THUMB_W, frames.THUMB_H
 SPRITE_INTERVAL_MS = 1000
-SPRITE_QUALITY = 70
 HTTP_TIMEOUT = 20
 DOWNLOAD_WORKERS = 8
 
@@ -223,31 +223,32 @@ def build_playlist(clip: Clip, clip_name: str = "clip.mp4", gap_ms: int = GAP_MS
 # ---------------------------------------------------------------- sprite
 
 
-def build_sprite(images: list[kvs.Image], start: datetime) -> tuple[bytes, int]:
-    """1 秒ごとのコマを 10×6 のシートにする。画像がない秒は黒。戻り値は (JPEG, 実際に埋めたコマ数)。"""
-    from PIL import Image as PILImage
+@dataclass
+class Sprite:
+    jpeg: bytes
+    frames: int  # 実際に埋めたコマ数(0〜60)
+    stats: dict = field(default_factory=dict)  # common.frames の統計(decode_ms、scale_ms、decoded など)
+    error: str | None = None
 
-    sheet = PILImage.new("RGB", (THUMB_W * SPRITE_COLS, THUMB_H * SPRITE_ROWS), (0, 0, 0))
-    base = epoch_ms(start)
-    filled: set[int] = set()
-    for im in images:
-        if not im.content:
-            continue
-        slot = (im.ts_ms - base) // SPRITE_INTERVAL_MS
-        if not 0 <= slot < SPRITE_COLS * SPRITE_ROWS or slot in filled:
-            continue
-        try:
-            thumb = PILImage.open(io.BytesIO(im.content)).convert("RGB")
-        except Exception as e:  # noqa: BLE001
-            log("sprite_decode_error", ts_ms=im.ts_ms, error=str(e))
-            continue
-        if thumb.size != (THUMB_W, THUMB_H):
-            thumb = thumb.resize((THUMB_W, THUMB_H))
-        sheet.paste(thumb, ((slot % SPRITE_COLS) * THUMB_W, (slot // SPRITE_COLS) * THUMB_H))
-        filled.add(slot)
-    out = io.BytesIO()
-    sheet.save(out, format="JPEG", quality=SPRITE_QUALITY, optimize=True)
-    return out.getvalue(), len(filled)
+
+def build_sprite(clip: Clip, start: datetime, end: datetime) -> Sprite:
+    """clip.mp4 のキーフレームを 1 秒に 1 枚デコードし、10×6 のシートにする。
+
+    コマ i(0〜59)は「区間の開始 + i 秒」の枠に入るキーフレーム(その秒の中の実際の時刻のフレーム)。
+    キーフレームがない枠(録画なし)は黒。区間の頭の枠には、その秒に始まる断片のキーフレームが入る
+    (前の区間の断片から続く部分は、この区間の clip に入っていないので使わない)。
+    デコードに失敗したら全コマ黒のシートを返し、理由を error に入れる(動画の退避は続ける)。
+    """
+    s_ms, e_ms = epoch_ms(start), epoch_ms(end)
+    try:
+        anchors = frames.anchors_from_fragments(clip.parts, [f.producer_ms for f in clip.fragments])
+        r = frames.decode_keyframes(clip.data, start_ms=s_ms, end_ms=e_ms, anchors=anchors,
+                                    interval_ms=SPRITE_INTERVAL_MS, sizes={"sprite": (THUMB_W, THUMB_H)})
+        jpeg, n = frames.build_sprite(r.frames, "sprite")
+        return Sprite(jpeg, n, r.stats)
+    except Exception as e:  # noqa: BLE001 - 壊れた断片などはスプライトだけの失敗にする
+        jpeg, _ = frames.build_sprite([], "sprite")
+        return Sprite(jpeg, 0, {}, f"{type(e).__name__}: {e}"[:1000])
 
 
 # ---------------------------------------------------------------- 本体
@@ -261,40 +262,11 @@ class Archiver:
     # テストで差し替えられるようにする
     list_fragments: Callable[..., list[kvs.Fragment]] = kvs.list_fragments
     clip_builder: Callable[..., Clip] = build_clip
-    get_images: Callable[..., list[kvs.Image]] = kvs.get_images
+    sprite_builder: Callable[[Clip, datetime, datetime], Sprite] = build_sprite
 
     def __post_init__(self):
         if self.s3 is None:
             self.s3 = boto3.client("s3")
-
-    def _images(self, stream: str, start: datetime, end: datetime, segments: list[list[int]]) -> tuple[list[kvs.Image], str | None]:
-        """スプライト用の画像を GetImages で取る。
-
-        まず区間全体 [start, end) を 1 回で取る(前の区間の断片が区間の頭にかかっていれば、その秒の絵も取れる)。
-        GetImages は範囲の始まりの近くに断片がないと ResourceNotFoundException になる(実測。録画の途中開始など)。
-        そのときは録画がある範囲ごとに「開始を秒に切り上げた時刻 〜 終わり」で取り直す
-        (断片のちょうど開始時刻を指定すると MEDIA_ERROR が返ることがあったため切り上げる)。
-        スプライトが作れなくても動画は退避する(エラーは文字列で返す)。
-        """
-        images: list[kvs.Image] = []
-        errors: list[str] = []
-        s_ms, e_ms = epoch_ms(start), epoch_ms(end)
-        try:
-            return self.get_images(stream, start, end, interval_ms=SPRITE_INTERVAL_MS, width=THUMB_W, height=THUMB_H), None
-        except Exception as e:  # noqa: BLE001
-            if "ResourceNotFound" not in type(e).__name__ and "ResourceNotFound" not in str(e):
-                return [], f"{type(e).__name__}: {e}"[:1000]
-        for seg_s, seg_e in segments:
-            a = max(s_ms, -(-seg_s // SPRITE_INTERVAL_MS) * SPRITE_INTERVAL_MS)
-            b = min(e_ms, seg_e)
-            if a >= b:
-                continue
-            try:
-                images += self.get_images(stream, from_epoch_ms(a), from_epoch_ms(b), interval_ms=SPRITE_INTERVAL_MS,
-                                          width=THUMB_W, height=THUMB_H)
-            except Exception as e:  # noqa: BLE001
-                errors.append(f"{type(e).__name__}: {e}"[:300])
-        return images, ("; ".join(errors)[:1000] or None)
 
     def process_minute(self, camera_id: str, start: datetime, end: datetime) -> MinuteResult:
         t: dict[str, Any] = {}
@@ -312,13 +284,11 @@ class Archiver:
         t["clip_ms"] = _ms(t1)
 
         t2 = time.monotonic()
-        images, sprite_err = self._images(stream, start, end, kvs.build_segments(frags, GAP_MS))
-        if sprite_err:
-            log("get_images_error", camera_id=camera_id, start=start, error=sprite_err)
-        t["images_ms"] = _ms(t2)
-        t3 = time.monotonic()
-        sprite, sprite_frames = build_sprite(images, start)
-        t["sprite_ms"] = _ms(t3)
+        sp = self.sprite_builder(clip, start, end)
+        if sp.error:
+            log("sprite_error", camera_id=camera_id, start=start, error=sp.error)
+        t["sprite_ms"] = _ms(t2)
+        sprite, sprite_frames, sprite_err = sp.jpeg, sp.frames, sp.error
 
         playlist = build_playlist(clip)
         prefix = media_prefix(camera_id, start)
@@ -353,7 +323,11 @@ class Archiver:
             kvs_bytes=sum(f.size for f in clip.fragments),
             sprite_bytes=len(sprite),
             sprite_frames=sprite_frames,
-            images=len(images),
+            decode_ms=sp.stats.get("decode_ms"),
+            scale_ms=sp.stats.get("scale_ms"),
+            keyframes=sp.stats.get("keyframes"),
+            decoded=sp.stats.get("decoded"),
+            decode_lost=sp.stats.get("lost"),
             recorded_ms=sum(e - s for s, e in segments),
             max_rss_mb=max_rss_mb(),
             total_ms=_ms(t0),
@@ -372,4 +346,4 @@ def env_int(name: str, default: int) -> int:
 
 
 __all__ = ["Archiver", "build_clip", "build_playlist", "build_sprite", "parse_media_playlist", "parse_master_playlist",
-           "Clip", "ArchiveError", "env_int"]
+           "Clip", "Sprite", "ArchiveError", "env_int"]

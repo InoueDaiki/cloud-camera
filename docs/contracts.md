@@ -54,7 +54,10 @@
 | `index.m3u8` | その 1 分の HLS(fMP4)プレイリスト。`clip.mp4` を `EXT-X-BYTERANGE` で参照する |
 | `sprite.jpg` | 1 秒おきのサムネイル 60 枚を 1 枚にまとめたシート。1 コマ 160×90、横 10 × 縦 6、左上から時刻順 |
 
-録画がない秒のコマは黒(または前のコマの複製)にする。どちらにしたかは DynamoDB の `segments` で区別できる。
+- `sprite.jpg` のコマ i(0〜59)は、枠 [区間の開始 + i 秒, + i + 1 秒) に入る **キーフレームの絵**(video_archiver が `clip.mp4` からデコードする。GetImages は使わない)。
+  絵の時刻は秒ちょうどではなく、その秒の中のキーフレームの実際の時刻(キーフレームの位相は送信開始時刻で決まり、実測では枠の開始から 0.5〜1 秒後)
+- 区間の頭の枠には、その区間に始まる断片のキーフレームが入る(前の区間の断片から続く部分は使わない)。キーフレームが 2 秒おきなら枠は 1 つおきに空く
+- 録画がない秒(キーフレームがない枠)のコマは黒にする。録画の有無は DynamoDB の `segments` で区別できる
 
 ## DynamoDB: `{p}-state`
 
@@ -82,7 +85,7 @@ PK `camera_id`(S)、SK `sk`(S)。TTL 属性 `expires_at`(数値、epoch 秒)。
 | `files` | video_archiver | M | `{"clip": key, "playlist": key, "sprite": key}` |
 | `hls` | video_archiver | M | `{"init_length": n, "parts": [[offset, length, duration_ms], ...]}`。API が複数区間のプレイリストを組むのに使う |
 | `fragment_count` / `bytes` | video_archiver | N | 実測値 |
-| `sprite_frames` / `sprite_error` | video_archiver | N / S | スプライトに入ったコマ数(0〜60)、画像が取れなかった理由(あれば) |
+| `sprite_frames` / `sprite_error` | video_archiver | N / S | スプライトに入ったコマ数(0〜60)、キーフレームのデコードに失敗した理由(あれば。動画は `DONE` で退避する) |
 | `video_duration_ms` / `video_attempts` | video_archiver | N | 実行時間、試行回数 |
 | `video_error` / `detect_error` | 各自(共通処理) | S | 最後の失敗の理由。成功したら消える |
 | `detect_status` | detector | S | `DONE` / `EMPTY` / `FAILED` |
@@ -115,6 +118,15 @@ def run_pipeline(kind: Literal["VIDEO", "DETECT"], camera_id: str,
 - ListFragments は、処理する区間がある起動ごとに 1 回(カーソル 〜 現在)。結果を起動の間キャッシュし、`common.kvs.list_fragments` はそこから返す
 - 再送による重複: 同じ ProducerTimestamp の断片が KVS に 2 つ入りうる。`common.kvs.list_fragments` が ProducerTimestamp で重複を除き、clip、`segments`、`fragment_count`、GetImages の時刻はその結果に揃える
 - `common.kvs.minute_ready` は廃止(互換のため常に `(True, "watermark")` を返す。「何も届いていない = 送信が止まった」とみなして進むため、回線断のあとの断片を取りこぼした)
+**物体検出は動画の退避を待つ(上流)**: 物体検出は動画の退避が置いた `clip.mp4` を読むので、`run_pipeline(..., upstream_kind="VIDEO")` で動かす。
+- 区間 [s, e) は `CURSOR#VIDEO` の `processed_until` ≥ e のときだけ処理する(**物体検出の処理済み位置は動画の退避の処理済み位置を越えない**)。
+  満たさなければ止めて次の起動を待つ(`stopped = waiting_upstream`、試行回数に数えない)。このとき物体検出は自分のウォーターマークを見ない(動画の退避が判定済み)
+- 区間の件の `video_status` で分岐する: `DONE` → `clip.mp4` からキーフレームをデコード、`EMPTY` → 検出なし(`detect_status = EMPTY`)、
+  `FAILED` → 予備の経路(KVS の GetImages)、件がない → `NotReady`
+- 動画の退避が区間の終わりから `UPSTREAM_MAX_WAIT_SECONDS`(環境変数、既定 1800 秒)を過ぎても進まないときだけ、上流を待たずに
+  自分のウォーターマークで判定し、予備の経路で処理する(KVS の保持 1 時間の内に)
+- 物体検出は動画の退避より 0〜1 分遅れて確定する
+
 `{kind}_attempts` は処理の前に 1 足す(タイムアウトで落ちても数える)。失敗の理由は `{kind}_error`(S、`video_error` / `detect_error`)に残し、成功したら消す。
 詳細は [lambdas/common/README.md](../lambdas/common/README.md)。
 Scheduler からの入力は `{"camera_id": "cam-001"}`。カメラごとに 1 本のスケジュールを作る。
@@ -128,7 +140,7 @@ Scheduler からの入力は `{"camera_id": "cam-001"}`。カメラごとに 1 �
 | 列 | 型 | 内容 |
 | --- | --- | --- |
 | `camera_id` | string | |
-| `ts` | timestamp(ミリ秒、UTC) | フレームの時刻(ProducerTimestamp) |
+| `ts` | timestamp(ミリ秒、UTC) | フレームの時刻(ProducerTimestamp)。`clip.mp4` のキーフレームの実際の時刻で、1 秒の枠に最大 1 枚(秒ちょうどではない。`sprite.jpg` の同じ枠のコマと同じフレーム)。予備の経路(GetImages)で取った区間だけは秒ちょうど |
 | `label` | string | COCO のクラス名(英語、例 `person`) |
 | `confidence` | float | 0〜1 |
 | `x` / `y` / `w` / `h` | float | 0〜1 に正規化したバウンディングボックス(左上原点) |

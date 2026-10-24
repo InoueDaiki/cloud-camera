@@ -7,6 +7,7 @@
 #   SMOKE=1 lambdas/detector/build.sh         # Lambda のベースイメージ(docker)で import と推論を確認
 #
 # 依存(onnxruntime、numpy、pillow、pyarrow)は Lambda 用の manylinux wheel を入れ、
+# clip.mp4 のキーフレームのデコード用に最小構成の PyAV(lambdas/common/pyav_min、docker でビルド、キャッシュあり。arm64 のみ)を入れ、
 # 使わないモジュール(pyarrow の Flight / S3、テスト、ヘッダーなど)を削り、strip して
 # 展開後 250MB の上限に収める。boto3 は Lambda のランタイムのものを使う。
 set -euo pipefail
@@ -80,10 +81,17 @@ if [ "${STRIP:-1}" = 1 ] && command -v docker >/dev/null; then
 fi
 AFTER_DEPS=$(du -sk "$STAGE" | cut -f1)
 
-# 3. 本体、共通処理、モデル
+# 3. PyAV(最小構成。PyPI の av の wheel は展開後 91 MB で 250 MB を超えるので使わない。lambdas/common/FRAMES.md)
+if [ "$ARCH" = arm64 ]; then
+  bash "$ROOT/lambdas/common/pyav_min/build.sh" "$STAGE"
+else
+  echo "注意: pyav_min は arm64 だけ。x86_64 の zip は FRAME_SOURCE=getimages で使う" >&2
+fi
+
+# 4. 本体、共通処理、モデル
 cp "$HERE"/handler.py "$HERE"/detect.py "$HERE"/parquet_store.py "$HERE"/frame_source.py "$STAGE/"
-rsync -a --exclude tests --exclude .venv --exclude '__pycache__' --exclude pyproject.toml \
-  --exclude uv.lock --exclude README.md "$ROOT/lambdas/common/" "$STAGE/common/"
+rsync -a --exclude tests --exclude .venv --exclude '__pycache__' --exclude '.pytest_cache' --exclude pyproject.toml \
+  --exclude uv.lock --exclude README.md --exclude FRAMES.md --exclude pyav_min "$ROOT/lambdas/common/" "$STAGE/common/"
 mkdir -p "$STAGE/models"
 for m in $MODELS; do
   f="$HERE/models/$m.onnx"
@@ -98,23 +106,25 @@ if [ -n "${EXTRA_DIR:-}" ]; then
   cp -R "$EXTRA_DIR"/. "$STAGE/"
 fi
 
-# 4. 確認(任意): Lambda のベースイメージで import と推論
+# 5. 確認(任意): Lambda のベースイメージで import と推論
 if [ "${SMOKE:-0}" = 1 ]; then
   docker run --rm --platform "$DOCKER_PLATFORM" \
     -v "$STAGE:/var/task:ro" -v "$HERE/tests/fixtures:/fixtures:ro" -v "$HERE/tools:/tools:ro" \
     --entrypoint python3.13 "public.ecr.aws/lambda/python:3.13-$ARCH" /tools/smoke.py
 fi
 
-# 5. zip
+# 6. zip
 rm -f "$OUT"
 (cd "$STAGE" && zip -q -r -9 -X "$OUT" .)
-TOTAL=$(du -sk "$STAGE" | cut -f1)
+# 展開後のサイズは zip の中の各ファイルの大きさの合計(Lambda が数えるのと同じ。du はブロック単位で多めに出る)
+TOTAL_BYTES=$(python3 -c 'import sys, zipfile; print(sum(i.file_size for i in zipfile.ZipFile(sys.argv[1]).infolist()))' "$OUT")
+TOTAL=$((TOTAL_BYTES / 1024))
 echo "依存(削る前): $((BEFORE / 1024)) MB"
 echo "依存(削った後): $((AFTER_DEPS / 1024)) MB"
 echo "展開後の合計: $((TOTAL / 1024)) MB(上限 250 MB)"
 echo "zip: $OUT $(($(stat -f%z "$OUT" 2>/dev/null || stat -c%s "$OUT") / 1024 / 1024)) MB"
 (cd "$STAGE" && du -sk -- * | sort -n | tail -8 | awk '{printf "  %6.1f MB  %s\n", $1/1024, $2}')
-if [ "$TOTAL" -gt $((250 * 1024)) ]; then
+if [ "$TOTAL_BYTES" -gt 262144000 ]; then
   echo "展開後のサイズが 250 MB を超えている" >&2
   exit 1
 fi

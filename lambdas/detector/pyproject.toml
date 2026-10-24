@@ -10,7 +10,9 @@ dependencies = [
 ]
 
 [dependency-groups]
+# av(PyPI の wheel)はテストで H.265 の fMP4 を作り、デコードするためだけに使う。zip には lambdas/common/pyav_min を入れる
 dev = [
+    "av>=19",
     "boto3>=1.43.118",
     "moto>=5.2.4",
     "onnx>=1.23.2",
