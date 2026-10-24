@@ -4,7 +4,7 @@ GetImages で 1 分区間を 1 秒間隔の JPEG(最大 60 枚)として取得 �
 → NMS → その日の Parquet の該当区間を置き換える。画像は S3 に置かない。
 
 環境変数(Terraform と合意済み): STATE_TABLE, DETECTIONS_BUCKET, STREAM_NAME_PREFIX, LAG_SECONDS,
-MAX_MINUTES, MAX_ATTEMPTS, MEDIA_RETENTION_DAYS(MAX_WAIT_SECONDS は video_archiver と共通の省略可能な値)
+MAX_MINUTES, MAX_ATTEMPTS, MEDIA_RETENTION_DAYS(断片が出そろうまでの待ちは common の run_pipeline が MAX_LATE_SECONDS で判断する)
 モデル関係(省略時は既定値): DETECT_MODEL, DETECT_INPUT_WIDTH, DETECT_IMAGE_HEIGHT, DETECT_THREADS,
 DETECT_BATCH, DETECT_SCORE_THRESHOLD, DETECT_NMS_THRESHOLD
 """
@@ -19,8 +19,7 @@ import boto3
 
 import frame_source
 import parquet_store
-from common import MinuteResult, NotReady, kvs, log, max_rss_mb, run_pipeline
-from common.timeutil import utcnow
+from common import MinuteResult, kvs, log, max_rss_mb, run_pipeline
 from detect import Detector
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -92,14 +91,7 @@ def detections_to_rows(camera_id: str, frames: list[tuple[datetime, list]], mode
 
 def process_minute(camera_id: str, start: datetime, end: datetime) -> MinuteResult:
     t0 = time.perf_counter()
-    stream = kvs.stream_name_for(camera_id)
     detector = get_detector()
-    # 0. 断片が出そろうまで待つ(エッジの送信が遅れているとき。common.kvs.minute_ready)
-    ready, why = kvs.minute_ready(stream, end, utcnow(), quiet_seconds=_env_int("LAG_SECONDS", 60),
-                                  max_wait_seconds=_env_int("MAX_WAIT_SECONDS", 600))
-    if not ready:
-        raise NotReady(why)
-
     # 1. フレームの取得(既定は GetImages。FRAME_SOURCE で差し替えられる)
     t = time.perf_counter()
     batch = FRAME_SOURCE(camera_id, start, end)

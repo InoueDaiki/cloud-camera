@@ -113,17 +113,6 @@ def test_frame_source_can_be_swapped(env, monkeypatch):
     assert res.attributes["detect_count"] > 0
 
 
-def test_not_ready_raises(env, monkeypatch):
-    handler, s3 = env
-    from common import NotReady
-
-    start = datetime(2026, 10, 24, 10, 20, tzinfo=UTC)
-    _fake_kvs(monkeypatch, start, n=60)
-    monkeypatch.setattr(kvs, "minute_ready", lambda *a, **k: (False, "producer_behind"))
-    with pytest.raises(NotReady):
-        handler.process_minute("cam-001", start, start + timedelta(minutes=1))
-
-
 def test_resource_not_found_falls_back_to_segments(env, monkeypatch):
     """録画が区間の途中(10:20:30.4〜)から始まると GetImages が ResourceNotFound になる → 録画範囲で取り直す。"""
     handler, s3 = env
