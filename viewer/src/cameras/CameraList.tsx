@@ -65,8 +65,8 @@ function CameraItem({ camera: c, selected, now, onSelect }: { camera: Camera; se
     onSettled: () => qc.invalidateQueries({ queryKey: ['cameras'] }),
   });
 
-  const desired = c.desired_streaming ?? c.streaming;
-  const pendingChange = c.online && desired !== c.streaming;
+  const desired = c.desired_streaming;
+  const pendingChange = c.online !== false && desired !== c.streaming;
   const processed = c.video_processed_until ? parseTime(c.video_processed_until) : null;
   const lag = processed !== null ? now - processed : null;
 
@@ -80,7 +80,7 @@ function CameraItem({ camera: c, selected, now, onSelect }: { camera: Camera; se
       <Group justify="space-between" wrap="nowrap" gap="xs" align="flex-start">
         <div style={{ minWidth: 0 }}>
           <Group gap={8} wrap="nowrap">
-            <span className={classes.dot} data-online={c.online || undefined} aria-hidden />
+            <span className={classes.dot} data-online={c.online === true || (c.online === null && c.streaming) || undefined} aria-hidden />
             <Text fw={600} size="md" truncate>
               {c.name ?? c.camera_id}
             </Text>
@@ -103,10 +103,9 @@ function CameraItem({ camera: c, selected, now, onSelect }: { camera: Camera; se
         </Tooltip>
       </Group>
       <Group gap={6} mt={8} ml={16}>
-        {c.online ? (
-          <Badge color="green">オンライン</Badge>
-        ) : (
-          <Tooltip label={c.last_seen ? `最終応答 ${formatHm(parseTime(c.last_seen))}` : '応答なし'}>
+        {c.online === true && <Badge color="green">オンライン</Badge>}
+        {c.online === false && (
+          <Tooltip label={c.reported_at ? `最終報告 ${formatHm(parseTime(c.reported_at))}` : '報告なし'}>
             <Badge color="gray">オフライン</Badge>
           </Tooltip>
         )}

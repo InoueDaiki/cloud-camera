@@ -1,7 +1,7 @@
 // モックのデータ。現在時刻から逆算して、それらしい録画の隙間、FAILED、未退避(KVS)の区間を作る。
 // 同じ時刻には常に同じ結果を返す(乱数は時刻とカメラから決める)。
 
-import type { Camera, RecordedRange, TimelineResponse, TimeRange } from '../api/types';
+import type { CameraRaw, RecordedRange, TimelineResponse, TimeRange } from '../api/types';
 import { DAY, floorTo, HOUR, jstDayStartOf, MINUTE, SECOND } from '../lib/time';
 
 /** モックの録画は 10 秒単位(テスト用 HLS の 1 セグメントの長さに合わせる) */
@@ -96,21 +96,26 @@ export function slotState(cameraId: string, slotStart: number, now: number): Slo
 
 const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
-export function mockCameras(now: number): Camera[] {
+/** GET /api/cameras(API と同じ形。`online` は API がまだ返さない任意の項目だが、表示の確認のため返す) */
+export function mockCameras(now: number): CameraRaw[] {
   return cameras.map((c) => {
     const off = offlineAt(c, now);
     const want = desired.get(c.camera_id) ?? false;
     return {
       camera_id: c.camera_id,
-      name: c.name,
       gateway_id: c.gateway_id,
+      stream_name: `cloud-camera-${c.camera_id}`,
       online: off === null,
-      streaming: off === null && want,
-      desired_streaming: want,
-      codec: 'H.265',
-      resolution: '1920x1080',
-      error: off === null ? null : 'ゲートウェイからの応答がありません(LWT 受信)',
-      last_seen: iso(off ?? now - 12 * SECOND),
+      reported: {
+        name: c.name,
+        streaming: off === null && want,
+        rtsp_url: `rtsp://emulator:8554/cam${c.camera_id.slice(-1)}/main`,
+        codec: 'H.265',
+        resolution: '1920x1080',
+        error: off === null ? null : 'ゲートウェイからの応答がありません(LWT 受信)',
+      },
+      desired: { name: c.name, streaming: want, username: 'admin', password: '***', profile_token: null },
+      reported_at: iso(off ?? now - 12 * SECOND),
       video_processed_until: iso(processedUntil(c, now)),
       detect_processed_until: iso(processedUntil(c, now) - MINUTE),
     };
@@ -265,6 +270,6 @@ LIMIT 50`;
     answer,
     hits,
     sql,
-    usage: { input_tokens: 2841, output_tokens: 312, athena_scanned_bytes: 4_718_592 },
+    usage: { input_tokens: 2841, output_tokens: 312, total_tokens: 3153, model_id: 'amazon.nova-2-lite-v1:0', bedrock_calls: 2, tool_calls: 1, athena_bytes_scanned: 4_718_592, elapsed_ms: 3480 },
   };
 }

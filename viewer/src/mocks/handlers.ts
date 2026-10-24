@@ -24,24 +24,27 @@ export const handlers = [
   http.put('/api/cameras/:id/streaming', async ({ params, request }) => {
     const body = (await request.json()) as { streaming?: boolean };
     await delay(400);
-    if (typeof body.streaming !== 'boolean') return HttpResponse.json({ message: 'streaming が必要です' }, { status: 400 });
-    if (!setDesiredStreaming(String(params.id), body.streaming)) return HttpResponse.json({ message: 'カメラがありません' }, { status: 404 });
-    return HttpResponse.json({ camera_id: params.id, streaming: body.streaming });
+    if (typeof body.streaming !== 'boolean') return HttpResponse.json({ error: { code: 'BAD_REQUEST', message: 'streaming が必要です' } }, { status: 400 });
+    if (!setDesiredStreaming(String(params.id), body.streaming)) return HttpResponse.json({ error: { code: 'CAMERA_NOT_FOUND', message: 'カメラがありません' } }, { status: 404 });
+    return HttpResponse.json({ camera_id: params.id, streaming: body.streaming, version: 1 });
   }),
 
   http.get('/api/cameras/:id/timeline', async ({ params, request }) => {
     const url = new URL(request.url);
     const from = t(url.searchParams.get('from'));
     const to = t(url.searchParams.get('to'));
-    if (Number.isNaN(from) || Number.isNaN(to)) return HttpResponse.json({ message: 'from と to が必要です' }, { status: 400 });
+    if (Number.isNaN(from) || Number.isNaN(to)) return HttpResponse.json({ error: { code: 'BAD_REQUEST', message: 'from と to が必要です' } }, { status: 400 });
     await delay(200);
     const res = mockTimeline(String(params.id), from, to, Date.now());
-    return res ? HttpResponse.json(res) : HttpResponse.json({ message: 'カメラがありません' }, { status: 404 });
+    return res ? HttpResponse.json(res) : HttpResponse.json({ error: { code: 'CAMERA_NOT_FOUND', message: 'カメラがありません' } }, { status: 404 });
   }),
 
   http.get('/api/cameras/:id/vod.m3u8', ({ params, request }) => {
     const url = new URL(request.url);
-    return m3u8(mockPlaylist(String(params.id), t(url.searchParams.get('from')), t(url.searchParams.get('to')), Date.now(), 's3'));
+    const body = mockPlaylist(String(params.id), t(url.searchParams.get('from')), t(url.searchParams.get('to')), Date.now(), 's3');
+    // 実際の API と同じく、録画がなければ 404
+    if (!body.includes('#EXTINF')) return HttpResponse.json({ error: { code: 'NO_RECORDING', message: '範囲内に S3 へ退避済みの録画がありません' } }, { status: 404 });
+    return m3u8(body);
   }),
 
   http.get('/api/cameras/:id/kvs-hls', async ({ params, request }) => {
@@ -52,7 +55,7 @@ export const handlers = [
     if (mode === 'LIVE') {
       const cam = mockCameras(Date.now()).find((c) => c.camera_id === params.id);
       // KVS は配信中でないと ResourceNotFoundException(「断片がない」)を返す
-      if (!cam?.streaming) return HttpResponse.json({ message: 'ライブ配信がありません' }, { status: 404 });
+      if (!cam?.reported?.streaming) return HttpResponse.json({ error: { code: 'NO_FRAGMENTS', message: 'ライブ配信がありません' } }, { status: 404 });
     }
     if (mode === 'LIVE') return HttpResponse.json({ url: `/__mock/kvs/${params.id}/live.m3u8`, expires_at: expires });
     const q = new URLSearchParams({ from: url.searchParams.get('from') ?? '', to: url.searchParams.get('to') ?? '' });
@@ -74,7 +77,7 @@ export const handlers = [
 
   http.post('/api/search', async ({ request }) => {
     const { question } = (await request.json()) as { question?: string };
-    if (!question?.trim()) return HttpResponse.json({ message: '質問を入力してください' }, { status: 400 });
+    if (!question?.trim()) return HttpResponse.json({ error: { code: 'BAD_REQUEST', message: '質問を入力してください' } }, { status: 400 });
     await delay(1200);
     return HttpResponse.json(mockSearch(question, Date.now()));
   }),

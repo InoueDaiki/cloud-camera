@@ -1,24 +1,50 @@
 // HTTP API の型(docs/contracts.md の「HTTP API」節に対応)
 
-/** GET /api/cameras の 1 件 */
-export interface Camera {
-  camera_id: string;
-  /** 表示名。なければ camera_id を出す */
-  name?: string | null;
-  gateway_id?: string | null;
-  /** ゲートウェイの死活(status トピック / LWT から) */
-  online: boolean;
-  /** シャドウの reported.streaming(実際に配信しているか) */
-  streaming: boolean;
-  /** シャドウの desired.streaming(配信の指示) */
-  desired_streaming?: boolean | null;
+/** シャドウの reported / desired のうち、ビューワーが読む項目(docs/contracts.md「IoT Core」) */
+export interface ShadowCamera {
+  streaming?: boolean | null;
   codec?: string | null;
   resolution?: string | null;
   error?: string | null;
-  /** 最後に死活を受け取った時刻 */
-  last_seen?: string | null;
+  name?: string | null;
+  [key: string]: unknown;
+}
+
+/** GET /api/cameras の 1 件(API の形そのまま) */
+export interface CameraRaw {
+  camera_id: string;
+  gateway_id?: string | null;
+  stream_name?: string | null;
+  reported?: ShadowCamera | null;
+  desired?: ShadowCamera | null;
+  reported_at?: string | null;
   video_processed_until?: string | null;
   detect_processed_until?: string | null;
+  /** ゲートウェイの死活。API が返すようになったら使う */
+  online?: boolean | null;
+}
+
+export interface CamerasResponseRaw {
+  cameras: CameraRaw[];
+}
+
+/** 画面で使う形に直したカメラ */
+export interface Camera {
+  camera_id: string;
+  name: string | null;
+  gateway_id: string | null;
+  /** 死活。不明なら null */
+  online: boolean | null;
+  /** 実際に配信しているか(reported) */
+  streaming: boolean;
+  /** 配信の指示(desired)。なければ reported と同じ */
+  desired_streaming: boolean;
+  codec: string | null;
+  resolution: string | null;
+  error: string | null;
+  reported_at: string | null;
+  video_processed_until: string | null;
+  detect_processed_until: string | null;
 }
 
 export interface CamerasResponse {
@@ -69,5 +95,5 @@ export interface SearchResponse {
   answer: string;
   hits: SearchHit[];
   sql?: string | null;
-  usage?: Record<string, number | string | null> | null;
+  usage?: Record<string, unknown> | null;
 }

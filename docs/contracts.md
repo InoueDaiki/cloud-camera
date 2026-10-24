@@ -158,21 +158,8 @@ Scheduler からの入力は `{"camera_id": "cam-001"}`。カメラごとに 1 �
 | `GET /api/cameras/{id}/kvs-hls?mode=LIVE\|ON_DEMAND&from=&to=` | KVS の HLS セッション URL(`{"url", "expires_at"}`)。fMP4 を指定 |
 | `POST /api/search` | `{"question": "..."}` → `{"answer": "...", "hits": [{"camera_id", "ts", "label", "confidence"}], "sql": "...", "usage": {...}}` |
 
-cameras のレスポンス(ビューワーが使う項目。`name` 以降は省略可):
-
-```json
-{"cameras": [{
-  "camera_id": "cam-001", "name": "玄関", "gateway_id": "gw-001",
-  "online": true, "streaming": true, "desired_streaming": true,
-  "codec": "H.265", "resolution": "1920x1080", "error": null, "last_seen": "...",
-  "video_processed_until": "...", "detect_processed_until": "..."
-}]}
-```
-
-`online` はゲートウェイの死活、`streaming` はシャドウの reported、`desired_streaming` は desired。
-
-kvs-hls は `DisplayFragmentTimestamp=ALWAYS` で発行する(ビューワーが `EXT-X-PROGRAM-DATE-TIME` で絶対時刻に合わせるため)。配信していないなどでセッションを作れないときは 404。
-search の `usage` は `{"input_tokens", "output_tokens", "athena_scanned_bytes"}`(数値。ほかのキーがあってもそのまま表示する)。
+ビューワーが cameras の `reported` / `desired` から読む項目: `streaming`、`codec`、`resolution`、`error`(`reported`)、`streaming`(`desired`)、`name`(どちらか。なければ camera_id を表示)。
+ゲートウェイの死活(status トピックの最終受信、LWT)を API が返せるようになったら、カメラの項目に `online`(bool)を足す。ない間、ビューワーは死活を「不明」として表示しない。
 
 timeline のレスポンス:
 

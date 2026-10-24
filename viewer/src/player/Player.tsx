@@ -170,7 +170,7 @@ export function Player({ pb, camera, now }: Props) {
             <IconVideoOff size={36} />
             <div className={classes.centerText}>
               ライブ映像がありません。
-              {camera && !camera.online ? 'カメラ(ゲートウェイ)がオフラインです。' : camera && !camera.streaming ? '配信が停止しています。' : ''}
+              {camera?.online === false ? 'カメラ(ゲートウェイ)がオフラインです。' : camera && !camera.streaming ? '配信が停止しています。' : ''}
             </div>
             {data && data.merged.length > 0 && (
               <Button size="xs" variant="white" color="dark" onClick={() => seek(data.merged[data.merged.length - 1].start)}>

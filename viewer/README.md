@@ -82,3 +82,4 @@ mise exec -- node scripts/screenshots.mjs <出力先> http://localhost:5173/
 - Safari(ネイティブ HLS)では断片ごとの `PROGRAM-DATE-TIME` を取れないため、録画の隙間をまたぐと表示時刻がずれることがある(`getStartDate()` + 経過秒で近似)
 - KVS の HLS で時刻を合わせるには、API が `DisplayFragmentTimestamp=ALWAYS` でセッション URL を発行している必要がある
 - 音声は扱わない(常にミュート)
+- API(lambdas/api)はゲートウェイの死活(`online`)をまだ返さないため、実環境ではオンライン/オフラインのバッジを出さない(モックは表示確認のため返す)。カメラ名はシャドウの `name` があれば使い、なければ camera_id

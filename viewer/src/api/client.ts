@@ -1,5 +1,8 @@
 import type {
+  Camera,
+  CameraRaw,
   CamerasResponse,
+  CamerasResponseRaw,
   KvsHlsResponse,
   SearchResponse,
   TimelineResponse,
@@ -24,8 +27,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
     try {
-      const body = (await res.json()) as { message?: string; error?: string };
-      message = body.message ?? body.error ?? message;
+      // API のエラーは {"error": {"code", "message"}}
+      const body = (await res.json()) as { message?: string; error?: string | { code?: string; message?: string } };
+      const err = body.error;
+      message = (typeof err === 'object' ? err?.message : err) ?? body.message ?? message;
     } catch {
       // 本文が JSON でなければステータスだけ出す
     }
@@ -36,8 +41,34 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
+const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
+
+/** API のカメラ(シャドウの reported / desired を含む)を画面で使う形に直す */
+export function normalizeCamera(raw: CameraRaw): Camera {
+  const rep = raw.reported ?? null;
+  const des = raw.desired ?? null;
+  const streaming = rep?.streaming === true;
+  return {
+    camera_id: raw.camera_id,
+    name: str(rep?.name) ?? str(des?.name),
+    gateway_id: raw.gateway_id ?? null,
+    online: typeof raw.online === 'boolean' ? raw.online : null,
+    streaming,
+    desired_streaming: typeof des?.streaming === 'boolean' ? des.streaming : streaming,
+    codec: str(rep?.codec),
+    resolution: str(rep?.resolution),
+    error: str(rep?.error),
+    reported_at: raw.reported_at ?? null,
+    video_processed_until: raw.video_processed_until ?? null,
+    detect_processed_until: raw.detect_processed_until ?? null,
+  };
+}
+
 export const api = {
-  cameras: () => request<CamerasResponse>('/cameras'),
+  cameras: async (): Promise<CamerasResponse> => {
+    const res = await request<CamerasResponseRaw>('/cameras');
+    return { cameras: res.cameras.map(normalizeCamera) };
+  },
 
   setStreaming: (cameraId: string, streaming: boolean) =>
     request<unknown>(`/cameras/${encodeURIComponent(cameraId)}/streaming`, {

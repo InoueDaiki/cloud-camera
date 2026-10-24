@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Hls, { type Fragment } from 'hls.js';
-import { api } from '../api/client';
+import { api, ApiError } from '../api/client';
 import { detectSupport } from '../lib/codec';
 import {
   playbackWindow,
@@ -145,6 +145,11 @@ export function usePlayback(processedUntil: (cameraId: string) => number | null)
         else url = (await api.kvsHls(cameraId, 'LIVE')).url;
       } catch (e) {
         if (cancelled) return;
+        if (win.kind === 'kvs' && e instanceof ApiError && e.status === 404) {
+          // 範囲に断片がない(NO_FRAGMENTS)。ライブへ進む
+          setRequest((r) => (r.cameraId === cameraId ? { cameraId, target: { kind: 'live' }, n: r.n + 1 } : r));
+          return;
+        }
         if (win.kind === 'live') {
           setStatus('no-live');
         } else {
@@ -229,7 +234,12 @@ export function usePlayback(processedUntil: (cameraId: string) => number | null)
       });
       hls.on(Hls.Events.ERROR, (_e, d) => {
         if (sessionRef.current?.id !== s.id || !d.fatal) return;
-        if (d.details === Hls.ErrorDetails.LEVEL_EMPTY_ERROR) {
+        // 窓に録画がない(vod.m3u8 は 404 NO_RECORDING、または空のプレイリスト)なら次の窓へ
+        const emptyWindow =
+          s.win.kind !== 'live' &&
+          d.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR &&
+          (d.response as { code?: number } | undefined)?.code === 404;
+        if (d.details === Hls.ErrorDetails.LEVEL_EMPTY_ERROR || emptyWindow) {
           advance(s);
           return;
         }

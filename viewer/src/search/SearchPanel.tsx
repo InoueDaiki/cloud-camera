@@ -45,11 +45,17 @@ const LABELS: Record<string, string> = {
 const USAGE_LABELS: Record<string, string> = {
   input_tokens: '入力トークン',
   output_tokens: '出力トークン',
-  athena_scanned_bytes: 'Athena のスキャン量',
+  total_tokens: '合計トークン',
+  athena_bytes_scanned: 'Athena のスキャン量',
+  model_id: 'モデル',
+  bedrock_calls: 'Bedrock の呼び出し',
+  tool_calls: 'ツールの呼び出し',
+  elapsed_ms: '所要時間',
 };
 
-function formatUsage(key: string, v: number | string | null): string {
-  if (typeof v !== 'number') return String(v ?? '—');
+function formatUsage(key: string, v: unknown): string {
+  if (typeof v !== 'number') return v === null || v === undefined ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+  if (/_ms$/.test(key)) return `${(v / 1000).toFixed(1)} 秒`;
   if (/bytes/.test(key)) return v >= 1024 * 1024 ? `${(v / 1024 / 1024).toFixed(1)} MB` : `${(v / 1024).toFixed(1)} KB`;
   return v.toLocaleString('ja-JP');
 }
