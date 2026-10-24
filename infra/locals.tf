@@ -26,7 +26,7 @@ locals {
   # Lambda の定義。キーは build/<key>.zip とディレクトリ名に対応する
   lambda_defaults = {
     video_archiver = { memory_size = 512, timeout = 300, ephemeral_storage = 1024 }
-    detector       = { memory_size = 3008, timeout = 300, ephemeral_storage = 1024 }
+    detector       = { memory_size = 1024, timeout = 300, ephemeral_storage = 1024 }
     api            = { memory_size = 512, timeout = 30, ephemeral_storage = 512 }
   }
   lambdas = {
