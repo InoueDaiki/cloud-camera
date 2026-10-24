@@ -23,6 +23,12 @@ describe('normalizeCamera', () => {
     });
   });
 
+  it('PTZ の対応は reported.ptz.supported で決める', () => {
+    expect(normalizeCamera({ camera_id: 'a', reported: { ptz: { supported: true, pan: 0 } } }).ptz_supported).toBe(true);
+    expect(normalizeCamera({ camera_id: 'b', reported: { ptz: { supported: false } } }).ptz_supported).toBe(false);
+    expect(normalizeCamera({ camera_id: 'c', reported: { streaming: true } }).ptz_supported).toBe(false);
+  });
+
   it('シャドウがまだない(reported も desired も null)', () => {
     const c = normalizeCamera({ camera_id: 'cam-002', reported: null, desired: null });
     expect(c.streaming).toBe(false);

@@ -44,6 +44,21 @@ for (const scheme of ['light', 'dark']) {
     await page.waitForTimeout(3500);
     await shot('1-live');
 
+    // PTZ: 右を押している間(continuous)と、プリセットの一覧
+    const right = page.getByRole('button', { name: '右へ' });
+    await right.scrollIntoViewIfNeeded();
+    const rb = await right.boundingBox();
+    await page.mouse.move(rb.x + rb.width / 2, rb.y + rb.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(1600);
+    await shot('1b-ptz-moving');
+    await page.mouse.up();
+    await page.getByRole('button', { name: /^プリセット/ }).click();
+    await page.waitForTimeout(500);
+    await shot('1c-ptz-presets');
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => globalThis.scrollTo(0, 0));
+
     // 録画の再生: シークバーの 40% の位置をクリック
     const track = page.getByRole('slider', { name: '再生位置' });
     const box = await track.boundingBox();

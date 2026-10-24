@@ -3,6 +3,7 @@
 
 import type { CameraRaw, RecordedRange, TimelineResponse, TimeRange } from '../api/types';
 import { DAY, floorTo, HOUR, jstDayStartOf, MINUTE, SECOND } from '../lib/time';
+import { mockPtzState } from './ptz';
 
 /** モックの録画は 10 秒単位(テスト用 HLS の 1 セグメントの長さに合わせる) */
 export const SLOT = 10 * SECOND;
@@ -113,6 +114,7 @@ export function mockCameras(now: number): CameraRaw[] {
         codec: 'H.265',
         resolution: '1920x1080',
         error: off === null ? null : 'ゲートウェイからの応答がありません(LWT 受信)',
+        ptz: mockPtzState(c.camera_id, now),
       },
       desired: { name: c.name, streaming: want, username: 'admin', password: '***', profile_token: null },
       reported_at: iso(off ?? now - 12 * SECOND),

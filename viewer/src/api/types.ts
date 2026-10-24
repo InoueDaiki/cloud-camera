@@ -7,6 +7,8 @@ export interface ShadowCamera {
   resolution?: string | null;
   error?: string | null;
   name?: string | null;
+  /** PTZ の状態(エッジが書く。docs/contracts.md「PTZ」) */
+  ptz?: PtzState | null;
   [key: string]: unknown;
 }
 
@@ -42,6 +44,8 @@ export interface Camera {
   codec: string | null;
   resolution: string | null;
   error: string | null;
+  /** PTZ に対応しているか(シャドウの reported.ptz.supported) */
+  ptz_supported: boolean;
   reported_at: string | null;
   video_processed_until: string | null;
   detect_processed_until: string | null;
@@ -96,4 +100,38 @@ export interface SearchResponse {
   hits: SearchHit[];
   sql?: string | null;
   usage?: Record<string, unknown> | null;
+}
+
+export interface PtzPreset {
+  token: string;
+  name: string;
+}
+
+/** GET /api/cameras/{id}/ptz(シャドウの reported.cameras.{id}.ptz)。pan / tilt は -1〜1、zoom は 0〜1 */
+export interface PtzState {
+  supported: boolean;
+  pan?: number | null;
+  tilt?: number | null;
+  zoom?: number | null;
+  presets?: PtzPreset[] | null;
+  move_status?: 'MOVING' | 'IDLE' | 'UNKNOWN' | null;
+  error?: string | null;
+  updated_at?: string | null;
+}
+
+export type PtzOp = 'continuous' | 'stop' | 'absolute' | 'relative' | 'goto_preset' | 'set_preset' | 'home';
+
+/** POST /api/cameras/{id}/ptz の本文(MQTT の cmd の op 以降と同じ形) */
+export interface PtzCommand {
+  op: PtzOp;
+  pan?: number;
+  tilt?: number;
+  zoom?: number;
+  timeout_ms?: number;
+  preset_token?: string;
+  preset_name?: string;
+}
+
+export interface PtzCommandResponse {
+  request_id: string;
 }

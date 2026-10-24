@@ -288,9 +288,10 @@ timeline のレスポンス:
  "pan": 0.5, "tilt": 0, "zoom": 0, "timeout_ms": 10000, "preset_token": "1", "preset_name": "玄関"}
 ```
 
-- `continuous` は速度、`absolute` は位置、`relative` は差分。`timeout_ms` は continuous の自動停止(既定 10000。stop を取りこぼしても動き続けない)
-- エッジは結果を `{p}/{gw}/ptz` に送る: `{"ts", "gateway_id", "camera_id", "request_id", "ok", "error"?, "position": {"pan", "tilt", "zoom"}, "move_status"}`
-- エッジはシャドウの `reported.cameras.{camera_id}.ptz` に `{"supported": bool, "pan", "tilt", "zoom", "presets": [{"token", "name"}], "updated_at"}` を書く。動いている間は 1 秒に 1 回まで、止まったら必ず 1 回
+- `continuous` は速度、`absolute` は位置、`relative` は差分(pan / tilt は -2〜2、zoom は -1〜1)。`timeout_ms` は continuous の自動停止(既定 10000、100〜60000。stop を取りこぼしても動き続けない)
+- エッジは結果を `{p}/{gw}/ptz` に送る: `{"ts", "gateway_id", "camera_id", "request_id", "ok", "error"?, "position": {"pan", "tilt", "zoom"}, "move_status", "preset_token"?}`(`preset_token` は set_preset のとき)
+- エッジはシャドウの `reported.cameras.{camera_id}.ptz` に `{"supported": bool, "pan", "tilt", "zoom", "presets": [{"token", "name"}], "move_status", "error", "updated_at"}` を書く。動いている間は 1 秒に 1 回まで、止まったら必ず 1 回。起動時(設定が変わったとき)にも 1 回
+  - `error` は準備(ONVIF の接続)に失敗したときだけ(このとき `supported: false`)。値のないキーは null で書く(シャドウからキーが消える)
 
 ### HTTP API
 

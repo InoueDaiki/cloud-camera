@@ -4,6 +4,9 @@ import type {
   CamerasResponse,
   CamerasResponseRaw,
   KvsHlsResponse,
+  PtzCommand,
+  PtzCommandResponse,
+  PtzState,
   SearchResponse,
   TimelineResponse,
 } from './types';
@@ -58,6 +61,7 @@ export function normalizeCamera(raw: CameraRaw): Camera {
     codec: str(rep?.codec),
     resolution: str(rep?.resolution),
     error: str(rep?.error),
+    ptz_supported: rep?.ptz?.supported === true,
     reported_at: raw.reported_at ?? null,
     video_processed_until: raw.video_processed_until ?? null,
     detect_processed_until: raw.detect_processed_until ?? null,
@@ -91,6 +95,15 @@ export const api = {
   /** S3 に退避済みの区間を連結した HLS プレイリストの URL(取得は hls.js / Safari が行う) */
   vodUrl: (cameraId: string, fromMs: number, toMs: number) =>
     `${API}/cameras/${encodeURIComponent(cameraId)}/vod.m3u8?from=${iso(fromMs)}&to=${iso(toMs)}`,
+
+  ptz: (cameraId: string) => request<PtzState>(`/cameras/${encodeURIComponent(cameraId)}/ptz`),
+
+  /** PTZ の操作。API は IoT Core に送ったところで 202 を返す(映像への反映はライブの遅れの分だけ後) */
+  ptzCommand: (cameraId: string, cmd: PtzCommand) =>
+    request<PtzCommandResponse>(`/cameras/${encodeURIComponent(cameraId)}/ptz`, {
+      method: 'POST',
+      body: JSON.stringify(cmd),
+    }),
 
   search: (question: string) =>
     request<SearchResponse>('/search', { method: 'POST', body: JSON.stringify({ question }) }),

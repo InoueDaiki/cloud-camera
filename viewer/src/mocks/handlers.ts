@@ -9,7 +9,9 @@ import {
   mockTimeline,
   setDesiredStreaming,
 } from './data';
+import { mockPtzCommand, mockPtzState } from './ptz';
 import { spriteBlob } from './sprite';
+import type { PtzCommand } from '../api/types';
 
 const t = (v: string | null) => (v ? Date.parse(v) : NaN);
 const m3u8 = (body: string) =>
@@ -27,6 +29,20 @@ export const handlers = [
     if (typeof body.streaming !== 'boolean') return HttpResponse.json({ error: { code: 'BAD_REQUEST', message: 'streaming が必要です' } }, { status: 400 });
     if (!setDesiredStreaming(String(params.id), body.streaming)) return HttpResponse.json({ error: { code: 'CAMERA_NOT_FOUND', message: 'カメラがありません' } }, { status: 404 });
     return HttpResponse.json({ camera_id: params.id, streaming: body.streaming, version: 1 });
+  }),
+
+  http.get('/api/cameras/:id/ptz', async ({ params }) => {
+    await delay(120);
+    return HttpResponse.json(mockPtzState(String(params.id), Date.now()));
+  }),
+
+  // 実際の API は IoT Core に送ったところで 202 を返す(エッジの処理は待たない)
+  http.post('/api/cameras/:id/ptz', async ({ params, request }) => {
+    const body = (await request.json()) as PtzCommand;
+    await delay(150);
+    const err = mockPtzCommand(String(params.id), body, Date.now());
+    if (err) return HttpResponse.json({ error: { code: 'BAD_REQUEST', message: err } }, { status: 400 });
+    return HttpResponse.json({ request_id: crypto.randomUUID() }, { status: 202 });
   }),
 
   http.get('/api/cameras/:id/timeline', async ({ params, request }) => {

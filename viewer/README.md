@@ -28,6 +28,22 @@ React + TypeScript + Vite。UI は [Mantine](https://mantine.dev/)、再生は [
 - ホバー(スマホはドラッグ中)で `sprite.jpg` の該当秒のコマを CSS で切り出して表示(`src/lib/sprite.ts`)
 - 録画がない時刻をクリックすると次の録画から再生する。矢印キーで 10 秒(Shift で 1 分)送る
 
+### PTZ
+
+シャドウの `reported.ptz.supported` が true のカメラだけ、操作ボタン(コントロール列の十字矢印)とパネル(映像の下)を出す。
+ライブ再生中だけ操作でき、録画の再生中はパネルを隠してボタンを無効にする(`src/player/PtzPanel.tsx`、ロジックは `src/lib/ptz.ts`)。
+
+- 方向パッドとズーム(+ / −): 押している間 `continuous`(速度 0.5、`timeout_ms` 4 秒を 2.5 秒ごとに送り直す)、
+  離したとき・ポインタが外れたとき・タブが非表示になったとき・ウィンドウのフォーカスが外れたとき・パネルが消えるときに `stop`。
+  250 ms より短い押下(タップ)は `relative` で一定量(pan / tilt 0.1、zoom 0.1)だけ動かす
+- 中央のボタンでホーム、「プリセット」の一覧から移動、「現在位置を保存」で `set_preset`
+- キーボード(パネルにフォーカスがあるときだけ): 矢印で向き、+ / − でズーム、Home でホーム
+- 命令は 1 つずつ順に送る(前の 202 を待つ)。待っている間の continuous / stop は最後の 1 つだけ送る
+- 現在の位置は `GET .../ptz`。操作中(と操作後 6 秒)は 0.7 秒、それ以外は 10 秒ごとに取り直す。
+  ミニマップは最大倍率 4 倍(エミュレーターの既定)を仮定した目安
+- ライブの HLS は数秒遅れるので、「操作は数秒後に映像に反映されます」と添える
+- タッチ端末(`pointer: coarse`)ではボタンを 44px にする
+
 ### H.265
 
 `MediaSource.isTypeSupported`(Safari は `canPlayType`)で `hvc1` / `hev1` を判定し、再生できない見込みなら案内を出す。
@@ -72,10 +88,10 @@ mise exec -- node scripts/screenshots.mjs <出力先> http://localhost:5173/
 | `src/theme.ts` | デザイントークン(色、余白、角丸、文字サイズ、ライト/ダークの意味色 `--cc-*`)。見た目の値はここだけで決める |
 | `src/api/` | API の型とクライアント |
 | `src/lib/` | 純粋なロジック(再生元の判定、シークバーの描画計算、スプライトのコマ位置、JST の時刻)と単体テスト |
-| `src/player/` | プレイヤー(`usePlayback` が再生元の切り替えと hls.js を扱う)、シークバー |
+| `src/player/` | プレイヤー(`usePlayback` が再生元の切り替えと hls.js を扱う)、シークバー、PTZ パネル |
 | `src/cameras/` | カメラ一覧 |
 | `src/search/` | 自然言語検索 |
-| `src/mocks/` | MSW のハンドラーとそれらしいデータ(録画の隙間、FAILED、未退避の区間、検出結果、canvas で描くスプライト) |
+| `src/mocks/` | MSW のハンドラーとそれらしいデータ(録画の隙間、FAILED、未退避の区間、検出結果、canvas で描くスプライト、疑似 PTZ の位置。玄関・駐車場は PTZ 対応、倉庫は非対応) |
 
 ## 既知の制約
 

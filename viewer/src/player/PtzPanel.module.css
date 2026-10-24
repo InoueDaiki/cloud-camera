@@ -1,0 +1,107 @@
+.panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--mantine-spacing-sm) var(--mantine-spacing-lg);
+  padding: var(--mantine-spacing-sm) var(--mantine-spacing-md);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--mantine-radius-md);
+  background: var(--cc-surface-muted);
+}
+
+.panel:focus-visible {
+  outline: 2px solid var(--mantine-primary-color-filled);
+  outline-offset: 2px;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: var(--mantine-spacing-md);
+}
+
+.pad {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 4px;
+}
+
+.zoom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.zoomLabel {
+  font-size: var(--mantine-font-size-xs);
+  color: var(--mantine-color-dimmed);
+  line-height: 1;
+}
+
+/* 押している間だけ動くボタン。長押しでの選択やメニュー、スクロールを抑える */
+.hold {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.hold[data-pressed] {
+  background: var(--mantine-primary-color-light);
+  color: var(--mantine-primary-color-light-color);
+  border-color: var(--mantine-primary-color-filled);
+}
+
+.info {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.minimap {
+  position: relative;
+  flex: none;
+  width: 64px;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--mantine-radius-xs);
+  border: 1px solid var(--cc-border);
+  background: var(--cc-video-bg);
+  overflow: hidden;
+}
+
+.window {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px solid var(--cc-ptz-window);
+  background: var(--cc-ptz-window-fill);
+  transition:
+    left 0.4s linear,
+    top 0.4s linear,
+    width 0.4s linear,
+    height 0.4s linear;
+}
+
+.readout {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font-size: var(--mantine-font-size-sm);
+}
+
+.axis {
+  margin-right: 4px;
+  font-size: var(--mantine-font-size-xs);
+  color: var(--mantine-color-dimmed);
+}
+
+.hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hintIcon {
+  flex: none;
+}

@@ -43,6 +43,9 @@ export const cssVariablesResolver: CSSVariablesResolver = (t) => ({
     '--cc-video-bg': '#000',
     '--cc-video-overlay': 'rgba(0, 0, 0, 0.55)',
     '--cc-video-overlay-text': '#fff',
+    // PTZ のミニマップ(黒い映像の上に描くので、ライト/ダーク共通)
+    '--cc-ptz-window': t.colors.brand[4],
+    '--cc-ptz-window-fill': 'rgba(75, 136, 227, 0.25)',
   },
   light: {
     '--cc-surface': t.white,

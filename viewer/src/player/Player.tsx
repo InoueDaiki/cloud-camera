@@ -16,6 +16,7 @@ import { useLocalStorage } from '@mantine/hooks';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   IconAlertTriangle,
+  IconArrowsMove,
   IconCalendar,
   IconChevronLeft,
   IconChevronRight,
@@ -39,6 +40,7 @@ import {
 } from '../lib/timeline';
 import { addDays, DAY, formatDateTime, formatHm, jstDate, jstDayStart } from '../lib/time';
 import type { Playback } from './usePlayback';
+import { PtzPanel } from './PtzPanel';
 import { Timeline, TimelineLegend } from './Timeline';
 import classes from './Player.module.css';
 
@@ -57,6 +59,7 @@ export function Player({ pb, camera, now }: Props) {
   const [pendingDate, setPendingDate] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [hevcDismissed, setHevcDismissed] = useLocalStorage({ key: 'cc-hevc-dismissed', defaultValue: false });
+  const [ptzOpen, setPtzOpen] = useLocalStorage({ key: 'cc-ptz-open', defaultValue: true });
 
   const today = jstDate(now);
   const isLive = source === 'live';
@@ -127,6 +130,9 @@ export function Player({ pb, camera, now }: Props) {
   const next = data && pos !== null && !isLive ? nextRecordingStart(data.merged, pos) : null;
   const processedUntil = data?.videoProcessedUntil ?? null;
   const playing = status === 'playing' || status === 'buffering';
+  // PTZ はライブ再生中だけ操作できる(録画の再生中はパネルを隠し、切り替えボタンは無効にする)
+  const ptzSupported = camera?.ptz_supported === true;
+  const ptzUsable = ptzSupported && isLive && status !== 'no-live';
 
   return (
     <Stack gap="sm">
@@ -237,6 +243,22 @@ export function Player({ pb, camera, now }: Props) {
               ))}
             </Menu.Dropdown>
           </Menu>
+          {ptzSupported && (
+            <Tooltip label={ptzUsable ? (ptzOpen ? 'PTZ 操作を隠す' : 'PTZ 操作を出す') : 'PTZ はライブ再生中だけ操作できます'}>
+              <ActionIcon
+                size="lg"
+                variant={ptzUsable && ptzOpen ? 'light' : 'subtle'}
+                color={ptzUsable && ptzOpen ? 'brand' : 'gray'}
+                data-disabled={!ptzUsable || undefined}
+                onClick={(e) => (ptzUsable ? setPtzOpen(!ptzOpen) : e.preventDefault())}
+                aria-label="PTZ 操作"
+                aria-pressed={ptzUsable && ptzOpen}
+                aria-disabled={!ptzUsable}
+              >
+                <IconArrowsMove size={18} />
+              </ActionIcon>
+            </Tooltip>
+          )}
         </Group>
 
         <Group gap="xs" wrap="nowrap">
@@ -268,6 +290,8 @@ export function Player({ pb, camera, now }: Props) {
           </Button>
         </Group>
       </Group>
+
+      {ptzUsable && ptzOpen && <PtzPanel key={cameraId} cameraId={cameraId} />}
 
       <Timeline
         day={day}
