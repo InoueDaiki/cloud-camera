@@ -40,6 +40,21 @@ def test_list_cameras(iot, ddb):
     assert c1["video_processed_until"] == "2026-10-24T10:25:00Z"
     assert c1["detect_processed_until"] is None
     assert cams[1]["reported"] is None
+    assert c1["online"] is None  # シャドウに死活がなければ不明
+
+
+@pytest.mark.parametrize("online, age_s, expected", [
+    (True, 10, True),
+    (True, 120, False),  # last_seen が古い = 異常終了
+    (False, 10, False),
+])
+def test_list_cameras_online(iot, online, age_s, expected):
+    from datetime import datetime, timedelta, timezone
+    seen = (datetime.now(timezone.utc) - timedelta(seconds=age_s)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    iot.update_thing_shadow(thingName="test-gw-001", payload=json.dumps(
+        {"state": {"reported": {"online": online, "last_seen": seen}}}).encode())
+    r = handler.lambda_handler(event("GET", "/api/cameras"), None)
+    assert json.loads(r["body"])["cameras"][0]["online"] is expected
 
 
 def test_set_streaming(iot):

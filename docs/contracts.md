@@ -171,7 +171,7 @@ MQTT のクライアント ID は Thing 名。LWT のトピックがポリシー
 | `POST /api/search` | `{"question": "..."}` → `{"answer": "...", "hits": [{"camera_id", "ts", "label", "confidence"}], "sql": "...", "usage": {...}}` |
 
 ビューワーが cameras の `reported` / `desired` から読む項目: `streaming`、`codec`、`resolution`、`error`(`reported`)、`streaming`(`desired`)、`name`(どちらか。なければ camera_id を表示)。
-ゲートウェイの死活(status トピックの最終受信、LWT)を API が返せるようになったら、カメラの項目に `online`(bool)を足す。ない間、ビューワーは死活を「不明」として表示しない。
+cameras の各項目の `online` はゲートウェイの死活(bool か null)。シャドウの `reported.online` が true でも `last_seen` が 90 秒より古ければ false、シャドウに情報がなければ null(ビューワーは「不明」として表示しない)。
 
 timeline のレスポンス:
 

@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from botocore.exceptions import ClientError
 
 from . import aws, state
 from .config import Config
 from .http import bad_request, not_found
-from .timeutil import iso
+from .timeutil import iso, now
+
+# エッジは 30 秒ごとに last_seen を更新する。これより古ければ異常終了とみなす
+_PRESENCE_TIMEOUT = timedelta(seconds=90)
 
 # シャドウの desired に入っている秘密はビューワーへ返さない
 _SECRET_KEYS = {"password"}
@@ -50,6 +53,21 @@ def _camera_state(shadow: dict | None, camera_id: str) -> tuple[dict | None, dic
     return reported, desired, updated
 
 
+def _online(shadow: dict | None) -> bool | None:
+    """ゲートウェイの死活。シャドウに情報がなければ None(不明)。"""
+    reported = ((shadow or {}).get("state") or {}).get("reported") or {}
+    online, last_seen = reported.get("online"), reported.get("last_seen")
+    if not isinstance(online, bool):
+        return None
+    if not online:
+        return False
+    try:
+        seen = datetime.fromisoformat(str(last_seen).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return now() - seen <= _PRESENCE_TIMEOUT
+
+
 def list_cameras(cfg: Config) -> dict:
     camera_ids = sorted(cfg.cameras)
     cursors = state.get_cursors(cfg, camera_ids) if camera_ids else {}
@@ -68,6 +86,7 @@ def list_cameras(cfg: Config) -> dict:
             "reported": reported,
             "desired": _mask(desired),
             "reported_at": updated,
+            "online": _online(shadows.get(gw)),
             "video_processed_until": iso(c["VIDEO"]) if c.get("VIDEO") else None,
             "detect_processed_until": iso(c["DETECT"]) if c.get("DETECT") else None,
         })
