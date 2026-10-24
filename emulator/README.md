@@ -13,6 +13,7 @@
 │      └ FFmpeg × 台数  testsrc / 動画ループ         │
 │          ├ 疑似 PTZ: 高解像度の元映像 → crop(zmq)│
 │          ├ main  H.265 libx265 → /cam{n}/main      │
+│          │       (main_codec=H264 で libx264)      │
 │          ├ sub   H.264 libx264 → /cam{n}/sub       │
 │          └ 1 秒ごとの JPEG(スナップショット)      │
 └───────────────────────────────────────────────────┘
@@ -30,7 +31,7 @@ EMULATOR_CAMERAS=4 docker compose -f emulator/compose.yaml up
 | ONVIF デバイスサービス(n 台目) | `http://<host>:{8080+n-1}/onvif/device_service` |
 | Media / Media2 | `…/onvif/media_service`、`…/onvif/media2_service`(GetServices / GetCapabilities でも取れる) |
 | PTZ | `…/onvif/ptz_service`(同上) |
-| RTSP | `rtsp://<host>:8554/cam{n}/main`(H.265)、`rtsp://<host>:8554/cam{n}/sub`(H.264) |
+| RTSP | `rtsp://<host>:8554/cam{n}/main`(既定 H.265。`EMULATOR_MAIN_CODEC` で H.264)、`rtsp://<host>:8554/cam{n}/sub`(H.264) |
 | スナップショット | `http://<host>:{8080+n-1}/onvif/snapshot.jpg` |
 | 状態(JSON) | `http://<host>:8080/healthz`(全カメラの FFmpeg の fps、再起動回数など) |
 
@@ -47,14 +48,14 @@ EMULATOR_CAMERAS=4 docker compose -f emulator/compose.yaml up
 | WS-Discovery | 起動時の Hello(2 回)、終了時の Bye、Probe → カメラごとの ProbeMatches(EndpointReference と XAddrs がカメラごとに別)、Resolve |
 | Device | GetDeviceInformation、GetSystemDateAndTime、SetSystemDateAndTime(受け付けるだけ)、GetCapabilities、GetServices、GetServiceCapabilities、GetScopes、GetHostname、GetNetworkInterfaces、GetNetworkProtocols、GetNetworkDefaultGateway、GetDNS、GetNTP、GetDiscoveryMode、GetUsers、GetRelayOutputs、GetWsdlUrl、GetEndpointReference |
 | Media(Profile S) | GetProfiles、GetProfile、GetStreamUri、GetSnapshotUri、GetVideoSources、GetVideoSourceConfiguration(s)、GetVideoEncoderConfiguration(s)、GetCompatibleVideoEncoderConfigurations、GetVideoEncoderConfigurationOptions、SetVideoEncoderConfiguration(sub のみ)、SetSynchronizationPoint、音声・メタデータ系は空で返す |
-| Media2 | GetProfiles、GetStreamUri、GetSnapshotUri、GetVideoEncoderConfigurations(main は `H265`)、GetVideoEncoderConfigurationOptions、GetVideoSourceConfigurations、SetVideoEncoderConfiguration、SetSynchronizationPoint、GetServiceCapabilities |
+| Media2 | GetProfiles、GetStreamUri、GetSnapshotUri、GetVideoEncoderConfigurations(main は既定 `H265`、`main_codec` が H264 なら `H264`)、GetVideoEncoderConfigurationOptions、GetVideoSourceConfigurations、SetVideoEncoderConfiguration、SetSynchronizationPoint、GetServiceCapabilities |
 | PTZ(ver20) | GetServiceCapabilities、GetNodes、GetNode、GetConfigurations、GetConfiguration、GetCompatibleConfigurations、GetConfigurationOptions、GetStatus、ContinuousMove、RelativeMove、AbsoluteMove、Stop、GetPresets、SetPreset、RemovePreset、GotoPreset、GotoHomePosition、SetHomePosition |
 
 - 認証は WS-Security UsernameToken(PasswordDigest と PasswordText)。ONVIF の PRE_AUTH(GetSystemDateAndTime、GetCapabilities、
   GetServices、GetServiceCapabilities、GetHostname、GetWsdlUrl、GetEndpointReference)は認証なしで応答する。
   誤った認証には SOAP 1.2 Fault `env:Sender` / `ter:NotAuthorized`(HTTP 400)、未実装の操作には `env:Receiver` / `ter:ActionNotSupported`。
 - Media2 の `GetProfiles` は仕様どおり、`Type`(`All`、`VideoEncoder` など)を指定したときだけ Configurations を返す。
-- Media(ver10)の Encoding には H265 がないため、H.265 の `Profile_Main` は VideoEncoderConfiguration を持たない(GetStreamUri は使える)。
+- Media(ver10)の Encoding には H265 がないため、H.265 の `Profile_Main` は VideoEncoderConfiguration を持たない(GetStreamUri は使える)。main を H.264 にしたカメラは main も持つ。
 - PTZ の操作も同じ UsernameToken の認証が必要(PRE_AUTH なし)。Media の各プロファイルと、Media2 の `GetProfiles`(`Type` が `All` か `PTZ`)に
   同じ PTZConfiguration(`PTZConfig_1`)が付く。
 - `SetVideoEncoderConfiguration` で変えられるのはビットレート上限、GovLength、フレームレート、Quality。変えると FFmpeg を再起動する
@@ -64,6 +65,9 @@ EMULATOR_CAMERAS=4 docker compose -f emulator/compose.yaml up
 
 - main: H.265(libx265)。VBR(CRF + `vbv-maxrate` で上限)、`keyint = min-keyint = fps × キーフレーム間隔`、`scenecut=0`、
   closed GOP、`repeat-headers=1`(途中から受信しても VPS/SPS/PPS が届く)、`-tune zerolatency`(B フレームなし)。
+  カメラごとに `main_codec: H264`(`EMULATOR_MAIN_CODEC` / `EMULATOR_CAM{n}_MAIN_CODEC`)で H.264(libx264、同じ方式)にできる。
+  Quality → CRF は H.265 が 40〜20、H.264 はそこから `H264_CRF_OFFSET` を引く(同じ Quality で同程度の画質。[docs/codec.md](../docs/codec.md))。
+  H.264 で H.265 と同じ画質を保つにはビットレート上限(`EMULATOR_BITRATE_KBPS`)も上げる(目安は docs/codec.md の比)
 - sub: H.264(libx264)、低解像度、GOP は main と同じ。
 - 時刻の焼き込み: フレームを作った時点の UTC(ミリ秒)、カメラ名、フレーム番号。1 フレームの壁時計(`RTCTIME`)から日付〜ミリ秒を
   まとめて出すので、桁ごとにずれない。遅延の計測は「受信側の時刻 − 焼き込まれた時刻」で行える(エンコードの遅延を含む)。
@@ -186,9 +190,10 @@ pyzmq の DEALER ソケットで UNIX ドメインソケット(`{runtime_dir}/ca
 | `EMULATOR_SOURCE` | testsrc | `testsrc`、`testsrc2`、`smptebars`、`smptehdbars`、`rgbtestsrc`、`mandelbrot`、`life`、`file:/media/xxx.mp4` |
 | `EMULATOR_WIDTH` / `EMULATOR_HEIGHT` | 1280 / 720 | main の解像度 |
 | `EMULATOR_FPS` | 15 | フレームレート(main と sub) |
+| `EMULATOR_MAIN_CODEC` | H265 | main のコーデック(`H265` / `H264`)。sub は常に H.264 |
 | `EMULATOR_BITRATE_KBPS` | 1024 | main の VBR 上限 |
 | `EMULATOR_KEYFRAME_INTERVAL_S` | 1 | キーフレーム間隔(秒)。60 を割り切れる値にする |
-| `EMULATOR_QUALITY` | 60 | ONVIF の Quality(0〜100、CRF 40〜20 に変換) |
+| `EMULATOR_QUALITY` | 60 | ONVIF の Quality(0〜100、H.265 は CRF 40〜20 に変換。H.264 は同程度の画質になる CRF) |
 | `EMULATOR_SUB_WIDTH` / `EMULATOR_SUB_HEIGHT` / `EMULATOR_SUB_BITRATE_KBPS` | 640 / 360 / 384 | sub の設定 |
 | `EMULATOR_PRESET` | ultrafast | x264 / x265 の preset |
 | `EMULATOR_PTZ` | true | 疑似 PTZ を有効にする(false で PTZ サービスを出さず、映像も PTZ なしの構成) |

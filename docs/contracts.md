@@ -11,7 +11,7 @@
 | リソース名の接頭辞 | `var.project`(既定 `cloud-camera`)。以下 `{p}` と書く |
 | カメラ ID | `cam-001` 形式。Terraform の `var.cameras`(list)で定義 |
 | ゲートウェイ ID | `gw-001` 形式。IoT Thing 名は `{p}-{gateway_id}` |
-| KVS ストリーム名 | `{p}-{camera_id}`。保持期間 1 時間 |
+| KVS ストリーム名 | `{p}-{camera_id}`。保持期間 1 時間。media type はカメラのコーデック(既定 `video/h265`、Terraform の `camera_codecs` で `video/h264`。[codec.md](codec.md)) |
 | 時刻 | すべて UTC。文字列は ISO 8601 の `2026-10-24T10:20:00Z`(区間の SK はミリ秒なし) |
 | Lambda | Python 3.13、arm64、zip デプロイ(コンテナイメージは使わない) |
 
@@ -156,11 +156,12 @@ Scheduler からの入力は `{"camera_id": "cam-001"}`。カメラごとに 1 �
   "onvif_url": "http://emulator:8080/onvif/device_service",
   "username": "admin", "password": "admin",
   "profile_token": null,
+  "prefer_codec": null,
   "streaming": true
 }}}}}
 ```
 
-`reported` はエッジが実際の状態(`streaming`、`rtsp_url`、`codec`、`resolution`、`error`)を返す。`profile_token` が null なら H.265 のプロファイルを自動選択する。
+`reported` はエッジが実際の状態(`streaming`、`rtsp_url`、`codec`(`H265` / `H264`)、`resolution`、`error`)を返す。`profile_token` が null なら `prefer_codec`(`H265` / `H264`。null ならエッジの `CC_PREFER_CODEC`、既定 `H265`)のプロファイルを自動選択し、なければもう一方のコーデックを使う(再エンコードしない)。
 desired に `rtsp_url`(と `codec`)を書くと ONVIF を使わずにその URL を直接使う(検証用)。
 シャドウは null を書くとキーを消すので、`error` などが null のときはキーがない(読む側は「ない = null」として扱う)。
 
@@ -254,9 +255,9 @@ timeline のレスポンス:
 - 既定のデバイスサービス URL: `http://<host>:8080/onvif/device_service`、既定の認証情報 `admin` / `admin`
   - カメラ n 台目は **ポートで分ける**: `http://<host>:{8080 + n - 1}/onvif/device_service`(cam1 = 8080、cam2 = 8081 …)。既定 2 台、カメラ名(ONVIF の name スコープと Hostname)は `cam-001` 形式
   - 認証なしで呼べるのは GetSystemDateAndTime、GetCapabilities、GetServices、GetServiceCapabilities、GetHostname、GetWsdlUrl、GetEndpointReference。誤った認証は SOAP Fault `env:Sender` / `ter:NotAuthorized`(HTTP 400)。PasswordText も受け付ける
-- Media2: `GetProfiles` は **`Type=["All"]`(または `VideoEncoder`)を指定したときだけ** Configurations を返す(ONVIF の仕様どおり)。H.265 は `Configurations.VideoEncoder.Encoding == "H265"` のプロファイル(token `Profile_Main`)、H.264 は `Profile_Sub`。`SetVideoEncoderConfiguration` でビットレート、GovLength、フレームレート、Quality を変えられ、配信が数秒途切れて再起動する(解像度とコーデックは固定)
-- Media(ver10): Encoding に H265 がないため、`Profile_Main` は VideoEncoderConfiguration を持たない(GetStreamUri は使える)
-- RTSP: `rtsp://<host>:8554/cam{n}/main`(H.265)、`.../sub`(H.264、低解像度)。キーフレーム間隔 1 秒(設定可)、VBR。RTSP の認証は既定でなし(`EMULATOR_RTSP_AUTH=true` でカメラの認証情報が必要)
+- Media2: `GetProfiles` は **`Type=["All"]`(または `VideoEncoder`)を指定したときだけ** Configurations を返す(ONVIF の仕様どおり)。main(token `Profile_Main`)の `Configurations.VideoEncoder.Encoding` は既定 `"H265"`、カメラごとの設定(`main_codec`)で `"H264"`。sub(`Profile_Sub`)は常に `"H264"`。`SetVideoEncoderConfiguration` でビットレート、GovLength、フレームレート、Quality を変えられ、配信が数秒途切れて再起動する(解像度とコーデックは固定)
+- Media(ver10): Encoding に H265 がないため、H.265 の `Profile_Main` は VideoEncoderConfiguration を持たない(GetStreamUri は使える)。main を H.264 にしたカメラは main も持つ
+- RTSP: `rtsp://<host>:8554/cam{n}/main`(既定 H.265。`main_codec` で H.264)、`.../sub`(H.264、低解像度)。キーフレーム間隔 1 秒(設定可)、VBR。RTSP の認証は既定でなし(`EMULATOR_RTSP_AUTH=true` でカメラの認証情報が必要)
 - スナップショット: `http://<host>:{ONVIF ポート}/onvif/snapshot.jpg`(1 秒ごとに更新、認証なし)
 - RTSP はフレームごとに一定間隔で送る(1 秒ごとのまとめ送りにしない)
 - 映像ソース: 時刻を焼き込んだテストパターン(既定)か、ループ再生する動画ファイル。焼き込む時刻はフレーム生成時の UTC(ミリ秒)
@@ -267,6 +268,8 @@ timeline のレスポンス:
 - `docker compose`(リポジトリ直下の `compose.yaml`)でエミュレーターとエッジを一緒に起動して検証できる
 - 証明書は `edge/.certs/`(gitignore 済み)をマウント。`scripts/` に Terraform の出力から証明書と設定を書き出すスクリプトを置く
 - 再エンコードしない: `rtspsrc ! rtph265depay ! h265parse ! video/x-h265,stream-format=hvc1,alignment=au ! h265timestamper ! kvssink`
+  - H.264 のカメラは `rtph264depay ! h264parse ! video/x-h264,stream-format=avc,alignment=au ! h264timestamper ! kvssink`(コーデックは ONVIF の Encoding、または desired の `codec`)。
+    kvssink は caps から codec-id(`V_MPEG4/ISO/AVC` / `V_MPEGH/ISO/HEVC`)と content-type(`video/h264` / `video/h265`)を決める
   - kvssink は NAL 変換をしないため、コーデックプライベートデータは caps の `codec_data` で渡す(`stream-format=hvc1` が必須)
   - RTP から取り出したフレームには DTS がなく、kvssink は「VPS/SPS/PPS を含み DTS が無効」なキーフレームを捨てる。`h265timestamper` で DTS を付ける
 - フラグメントはキーフレームごと(エミュレーターのキーフレーム間隔 1 秒 → 1 秒ごと)。ProducerTimestamp はゲートウェイの壁時計(NTP 前提)で、最初のフレームを受け取った時刻 + PTS の差分

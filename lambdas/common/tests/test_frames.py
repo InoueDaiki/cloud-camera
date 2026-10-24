@@ -51,6 +51,18 @@ def test_decodes_one_keyframe_per_second(clip5):
         assert row[2].mean() > 200 and abs(row[60].mean() - _level(sec)) < 12
 
 
+def test_decodes_h264_keyframes():
+    """H.264 のカメラ(docs/codec.md)でも同じ結果になる(pyav_min は H.264 のデコーダも入れている)。"""
+    clip = make_fmp4(3, codec="h264")
+    r = frames.decode_keyframes(clip, start_ms=START, end_ms=START + 60_000, base_ms=BASE,
+                                sizes={"sprite": (160, 90)})
+    assert r.stats["codec"] == "h264"
+    assert [f.ts_ms - BASE for f in r.frames] == [0, 1000, 2000]
+    assert r.stats["decoded"] == 3
+    for f in r.frames:
+        assert abs(_mean(f.images["sprite"]) - _level(f.slot)) < 8
+
+
 def test_range_is_half_open_and_outside_frames_are_not_decoded(clip5):
     # キーフレームは START + 0.979, 1.979, 2.979, … 秒。終わりちょうど(2.979 秒)は含まない
     r = frames.decode_keyframes(clip5, start_ms=START + 1000, end_ms=START + 2979, base_ms=BASE,

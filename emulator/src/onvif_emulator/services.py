@@ -152,7 +152,7 @@ class CameraServices(PtzServiceMixin):
         )
 
     def _encoder1_xml(self, tag: str, which: str) -> str:
-        """Media1 の VideoEncoderConfiguration。Media1 の Encoding は JPEG/MPEG4/H264 のみなので sub(H.264)専用。"""
+        """Media1 の VideoEncoderConfiguration。Media1 の Encoding は JPEG/MPEG4/H264 のみなので H.264 のストリーム専用。"""
         s = self._stream(which)
         return (
             f'<{tag} token="{ENCODER_TOKEN[which]}">'
@@ -171,7 +171,7 @@ class CameraServices(PtzServiceMixin):
         )
 
     def _encoder2_xml(self, tag: str, which: str) -> str:
-        """Media2 の VideoEncoder2Configuration。main は H265、sub は H264。"""
+        """Media2 の VideoEncoder2Configuration。main は既定 H265(設定で H264)、sub は H264。"""
         s = self._stream(which)
         profile = "Main" if s.codec == "H265" else "High"
         return (
@@ -185,8 +185,12 @@ class CameraServices(PtzServiceMixin):
             f"</{tag}>"
         )
 
+    def _media1_streams(self) -> list[str]:
+        """Media1 で VideoEncoderConfiguration を返せるストリーム(H.264 のもの。sub と、H.264 にした main)。"""
+        return [w for w in STREAMS if self._stream(w).codec == "H264"]
+
     def _profile1_xml(self, which: str) -> str:
-        enc = self._encoder1_xml("tt:VideoEncoderConfiguration", which) if which == "sub" else ""
+        enc = self._encoder1_xml("tt:VideoEncoderConfiguration", which) if which in self._media1_streams() else ""
         # main と sub は同じ切り出し窓なので、同じ PTZConfiguration を付ける
         ptz = ptz_configuration_xml("tt:PTZConfiguration") if self.ptz else ""
         return (
@@ -510,27 +514,29 @@ class CameraServices(PtzServiceMixin):
     def m1_GetVideoEncoderConfigurations(self, req, ctx):
         return (
             "<trt:GetVideoEncoderConfigurationsResponse>"
-            f"{self._encoder1_xml('trt:Configurations', 'sub')}"
+            f"{''.join(self._encoder1_xml('trt:Configurations', w) for w in self._media1_streams())}"
             "</trt:GetVideoEncoderConfigurationsResponse>"
         )
 
     def m1_GetVideoEncoderConfiguration(self, req, ctx):
         which = self._encoder_from_token(child_text(req.body, "ConfigurationToken"))
-        if which != "sub":
+        if which not in self._media1_streams():
             raise invalid_arg("NoConfig", "H.265 configuration is only available via Media2")
         return (
             "<trt:GetVideoEncoderConfigurationResponse>"
-            f"{self._encoder1_xml('trt:Configuration', 'sub')}"
+            f"{self._encoder1_xml('trt:Configuration', which)}"
             "</trt:GetVideoEncoderConfigurationResponse>"
         )
 
     def m1_GetCompatibleVideoEncoderConfigurations(self, req, ctx):
         which = self._profile_from_token(child_text(req.body, "ProfileToken"))
-        conf = self._encoder1_xml("trt:Configurations", "sub") if which == "sub" else ""
+        conf = self._encoder1_xml("trt:Configurations", which) if which in self._media1_streams() else ""
         return f"<trt:GetCompatibleVideoEncoderConfigurationsResponse>{conf}</trt:GetCompatibleVideoEncoderConfigurationsResponse>"
 
     def m1_GetVideoEncoderConfigurationOptions(self, req, ctx):
-        s = self.cam.sub
+        # ConfigurationToken / ProfileToken の指定があればそのストリーム、なければ sub(H.264)
+        targets = [w for w in self._m2_targets(req) if w in self._media1_streams()]
+        s = self._stream(targets[0] if targets else "sub")
         return (
             "<trt:GetVideoEncoderConfigurationOptionsResponse><trt:Options>"
             f"<tt:QualityRange><tt:Min>{QUALITY_RANGE[0]}</tt:Min><tt:Max>{QUALITY_RANGE[1]}</tt:Max></tt:QualityRange>"
@@ -546,7 +552,7 @@ class CameraServices(PtzServiceMixin):
     def m1_SetVideoEncoderConfiguration(self, req, ctx):
         conf = child(req.body, "Configuration")
         which = self._encoder_from_token(conf.get("token") if conf is not None else None)
-        if which != "sub":
+        if which not in self._media1_streams():
             raise invalid_arg("ConfigModify", "H.265 configuration can only be changed via Media2")
         self._apply_encoder(which, conf, media2=False)
         return "<trt:SetVideoEncoderConfigurationResponse/>"

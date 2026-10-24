@@ -14,6 +14,8 @@ set -euo pipefail
 P="${TMP_PROJECT:-cc-tmp-edge}"
 GW="${TMP_GATEWAY:-gw-001}"
 CAMS="${TMP_CAMERAS:-cam-001}"
+# H.264 で送るカメラ(KVS ストリームの media type を video/h264 にする。ほかは video/h265。docs/codec.md)
+H264_CAMS=" ${TMP_H264_CAMERAS:-} "
 REGION="${AWS_REGION:-ap-northeast-1}"
 export AWS_PROFILE="${AWS_PROFILE:-cloud-camera}" AWS_REGION="$REGION" AWS_PAGER=""
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -69,8 +71,10 @@ up() {
 
   echo "== KVS ストリーム(保持 1 時間)"
   for c in $CAMS; do
+    mt=video/h265
+    [[ "$H264_CAMS" == *" $c "* ]] && mt=video/h264
     aws kinesisvideo create-stream --stream-name "$P-$c" --data-retention-in-hours 1 \
-      --media-type video/h265 >/dev/null
+      --media-type "$mt" >/dev/null
     aws kinesisvideo describe-stream --stream-name "$P-$c" \
       --query 'StreamInfo.[StreamName,DataRetentionInHours,MediaType,Status]' --output text
   done

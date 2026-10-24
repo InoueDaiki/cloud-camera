@@ -1,6 +1,6 @@
-"""テスト用の H.265 fMP4 を作る(common / video_archiver / detector のテストで共用)。
+"""テスト用の H.265(または H.264)fMP4 を作る(common / video_archiver / detector のテストで共用)。
 
-PyAV の PyPI wheel(libx265 を同梱)でその場でエンコードする。zip には入らない(tests/ は同梱しない)。
+PyAV の PyPI wheel(libx265 と libx264 を同梱)でその場でエンコードする。zip には入らない(tests/ は同梱しない)。
     from common.tests.media import make_fmp4, moof_offsets, level
 """
 
@@ -21,8 +21,8 @@ def level(sec: int) -> int:
 
 
 def make_fmp4(seconds: int, *, fps: int = FPS, keyint: int = FPS, gap_after: int | None = None,
-              gap_s: int = 0) -> bytes:
-    """1 秒 1 キーフレームの H.265 fMP4(KVS の HLS の init + 断片と同じく moof + mdat、キーフレームごとに断片)。
+              gap_s: int = 0, codec: str = "h265") -> bytes:
+    """1 秒 1 キーフレームの H.265(codec="h264" なら H.264)fMP4(KVS の HLS の init + 断片と同じく moof + mdat、キーフレームごとに断片)。
 
     フレームの明るさは「その秒の番号」で決まる。gap_after 秒の後に gap_s 秒の空白(録画の切れ目)を入れる。
     """
@@ -32,9 +32,13 @@ def make_fmp4(seconds: int, *, fps: int = FPS, keyint: int = FPS, gap_after: int
     buf = io.BytesIO()
     out = av.open(buf, mode="w", format="mp4",
                   options={"movflags": "frag_keyframe+empty_moov+default_base_moof"})
-    st = out.add_stream("libx265", rate=fps)
+    if codec == "h264":
+        st = out.add_stream("libx264", rate=fps)
+        st.codec_context.options = {"x264-params": f"keyint={keyint}:min-keyint={keyint}:scenecut=0:bframes=0"}
+    else:
+        st = out.add_stream("libx265", rate=fps)
+        st.codec_context.options = {"x265-params": f"keyint={keyint}:min-keyint={keyint}:scenecut=0:bframes=0:log-level=none"}
     st.width, st.height, st.pix_fmt = W, H, "yuv420p"
-    st.codec_context.options = {"x265-params": f"keyint={keyint}:min-keyint={keyint}:scenecut=0:bframes=0:log-level=none"}
     st.codec_context.time_base = Fraction(1, fps)
     pts = 0
     for i in range(seconds * fps):

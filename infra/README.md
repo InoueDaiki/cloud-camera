@@ -31,6 +31,7 @@ scripts/destroy.sh cc-tmp-foo
 | `project` | `cloud-camera` | 接頭辞 `{p}` |
 | `gateways` | `{"gw-001" = ["cam-001"]}` | ゲートウェイ ID → カメラ ID のリスト |
 | `cameras` | null(gateways から導く) | カメラ ID のリスト |
+| `camera_codecs` | `{}` | カメラ ID → `H265` / `H264`。KVS ストリームの media type(`video/h265` / `video/h264`)。書いていないカメラは H265。変更はストリームの作り直しなしで反映される(UpdateStream)。エッジの `prefer_codec` とエミュレーターの `main_codec` も合わせる([docs/codec.md](../docs/codec.md)) |
 | `kvs_retention_hours` | 1 | KVS の保持期間 |
 | `media_retention_days` | 30 | メディアバケットの保存日数(Lambda の `MEDIA_RETENTION_DAYS`) |
 | `lag_seconds` / `max_minutes` / `max_attempts` | 45 / 10 / 5 | Lambda の環境変数にそのまま渡す |
@@ -47,7 +48,7 @@ scripts/destroy.sh cc-tmp-foo
 
 | ファイル | リソース |
 | --- | --- |
-| `kvs_iot.tf` | KVS ストリーム `{p}-{camera_id}`(保持 1 時間、`video/h265`)、IoT Thing `{p}-{gw}`、証明書(Terraform で発行・有効化)、ゲートウェイごとのポリシー(自分のクライアント ID、`{p}/{gw}/*`、自分のシャドウだけ)、KVS 用ロールとロールエイリアス `{p}-kvs-role-alias`(`{p}-*` のストリームへの PutMedia 等だけ) |
+| `kvs_iot.tf` | KVS ストリーム `{p}-{camera_id}`(保持 1 時間、`video/h265`。カメラごとに `camera_codecs` で `video/h264`)、IoT Thing `{p}-{gw}`、証明書(Terraform で発行・有効化)、ゲートウェイごとのポリシー(自分のクライアント ID、`{p}/{gw}/*`、自分のシャドウだけ)、KVS 用ロールとロールエイリアス `{p}-kvs-role-alias`(`{p}-*` のストリームへの PutMedia 等だけ) |
 | `s3.tf` | media / detections / athena / viewer / artifacts の 5 バケット。全部パブリックアクセスをブロック、SSE-S3。media は保存日数で削除、detections はバージョニングと旧バージョン 1 日削除、現行版は media と同じ保存日数で削除、athena は 7 日削除。media と viewer は CloudFront(OAC)からの GetObject だけ許可 |
 | `data.tf` | DynamoDB `{p}-state`(オンデマンド、TTL `expires_at`)、Glue `{p_underscored}.detections`(Parquet、`dt` のパーティションプロジェクション)、Athena ワークグループ `{p}` |
 | `lambda.tf` | `{p}-video-archiver` / `{p}-detector` / `{p}-api`(Python 3.13、arm64、`handler.lambda_handler`)。zip は artifacts バケット経由でデプロイ(50MB 超でも可、展開後 250MB まで)。関数ごとの IAM ロール、ロググループ |

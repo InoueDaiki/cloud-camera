@@ -29,6 +29,7 @@ import {
 } from '@tabler/icons-react';
 import { api } from '../api/client';
 import type { Camera } from '../api/types';
+import { mayBeHevc } from '../lib/codec';
 import { LIVE_THRESHOLD_MS, SOURCE_LABEL } from '../lib/playbackSource';
 import {
   nextRecordingStart,
@@ -136,7 +137,8 @@ export function Player({ pb, camera, now }: Props) {
 
   return (
     <Stack gap="sm">
-      {!support.hevc && !hevcDismissed && (
+      {/* H.264 と分かっているカメラでは出さない(コーデックが分からないときは出す) */}
+      {!support.hevc && !hevcDismissed && mayBeHevc(camera?.codec) && (
         <Alert
           color="yellow"
           variant="light"

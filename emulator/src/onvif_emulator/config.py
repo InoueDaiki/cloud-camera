@@ -22,6 +22,21 @@ import yaml
 # ---------------------------------------------------------------------------
 
 
+# H.264 の CRF を H.265 よりいくつ下げると同程度の画質になるか(docs/codec.md の測定。既定の Quality 60 付近)
+H264_CRF_OFFSET = 0
+
+CODECS = ("H265", "H264")
+
+
+def normalize_codec(v: str) -> str:
+    """"h265" / "H.265" / "HEVC" → "H265"、"h264" / "H.264" / "AVC" → "H264"。"""
+    c = str(v).strip().upper().replace(".", "").replace("-", "")
+    c = {"HEVC": "H265", "AVC": "H264"}.get(c, c)
+    if c not in CODECS:
+        raise ValueError(f"対応していないコーデック {v!r}(H265 か H264)")
+    return c
+
+
 @dataclass
 class StreamSettings:
     """1 本の映像ストリーム(main / sub)の設定。実行中に SetVideoEncoderConfiguration で一部変わる。"""
@@ -40,9 +55,16 @@ class StreamSettings:
 
     @property
     def crf(self) -> int:
-        """Quality 0〜100 を CRF 40〜20 に線形変換する。"""
+        """Quality 0〜100 を CRF に線形変換する。H.265 は 40〜20。
+
+        H.264 は同じ Quality で同程度の画質(VMAF)になるよう、H.265 の CRF から `H264_CRF_OFFSET` を引く
+        (x264 と x265 は同じ CRF でも画質が違う。docs/codec.md の測定)。
+        """
         q = min(max(self.quality, 0.0), 100.0)
-        return round(40 - q * 0.2)
+        crf = 40 - q * 0.2
+        if self.codec == "H264":
+            crf -= H264_CRF_OFFSET
+        return max(0, round(crf))
 
 
 @dataclass
@@ -121,6 +143,7 @@ CAMERA_DEFAULTS: dict[str, Any] = {
     "width": 1280,
     "height": 720,
     "fps": 15,
+    "main_codec": "H265",  # main のコーデック(H265 / H264)。sub は常に H.264
     "bitrate_kbps": 1024,
     "keyframe_interval_s": 1.0,
     "quality": 60,
@@ -148,6 +171,7 @@ _CAMERA_ENV_KEYS: dict[str, tuple[str, type]] = {
     "WIDTH": ("width", int),
     "HEIGHT": ("height", int),
     "FPS": ("fps", int),
+    "MAIN_CODEC": ("main_codec", str),
     "BITRATE_KBPS": ("bitrate_kbps", int),
     "KEYFRAME_INTERVAL_S": ("keyframe_interval_s", float),
     "QUALITY": ("quality", float),
@@ -243,7 +267,7 @@ def _build_camera(index: int, values: dict[str, Any], base_port: int) -> CameraC
         password=str(v["password"]),
         source=source,
         main=StreamSettings(
-            codec="H265",
+            codec=normalize_codec(v["main_codec"]),
             width=int(v["width"]),
             height=int(v["height"]),
             fps=fps,

@@ -136,6 +136,30 @@ def test_select_profile_fallback_h264():
     assert onvif.select_profile(ps).token == "b"
 
 
+def test_select_profile_prefer_h264():
+    ps = [onvif.Profile("main", encoding="H265", width=1920, height=1080),
+          onvif.Profile("sub", encoding="H264", width=640, height=360),
+          onvif.Profile("main264", encoding="H264", width=1280, height=720)]
+    assert onvif.select_profile(ps).token == "main"
+    assert onvif.select_profile(ps, prefer="H.264").token == "main264"
+    # H.264 優先でも H.264 がなければ H.265
+    assert onvif.select_profile(ps[:1], prefer="h264").token == "main"
+    with pytest.raises(ValueError):
+        onvif.select_profile(ps, prefer="VP9")
+
+
+def test_resolve_prefer_h264(camera):
+    info = onvif.OnvifClient(camera, "admin", "admin").resolve(prefer_codec="H264")
+    assert info.codec == "H264" and info.rtsp_url.endswith("/sub")
+
+
+def test_prefer_codec_config():
+    from cc_edge import config
+
+    assert config.load({"CC_CONFIG_FILE": "/nonexistent"}).prefer_codec == "H265"
+    assert config.load({"CC_CONFIG_FILE": "/nonexistent", "CC_PREFER_CODEC": "avc"}).prefer_codec == "H264"
+
+
 def test_parse_probe_matches():
     raw = f"""<s:Envelope xmlns:s="{S}" xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing"
       xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery"><s:Body><d:ProbeMatches><d:ProbeMatch>

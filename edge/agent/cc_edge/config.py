@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .onvif import normalize_codec
+
 SINKS = ("kvs", "fake", "file")
 
 
@@ -61,6 +63,8 @@ class Config:
     kvs_replay_s: int = 0  # 0 ならバッファと同じ長さ
     kvs_framerate: int = 0  # 0 なら 30 で見積もる(バッファの枠 = framerate × kvs_buffer_s)
     kvs_log_config: str = "/opt/kvs/kvs_log_configuration"
+    # ONVIF でプロファイルを自動選択するときに優先するコーデック(H265 / H264)。カメラごとにシャドウの prefer_codec で上書きできる
+    prefer_codec: str = "H265"
 
     # シャドウを使わないときのカメラ設定(シャドウの desired.cameras と同じ形)
     cameras: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -130,6 +134,7 @@ _ENV = {
     "CC_KVS_REPLAY_S": "kvs_replay_s",
     "CC_KVS_FRAMERATE": "kvs_framerate",
     "CC_KVS_LOG_CONFIG": "kvs_log_config",
+    "CC_PREFER_CODEC": "prefer_codec",
     "CC_LOG_LEVEL": "log_level",
 }
 
@@ -166,6 +171,7 @@ def load(env: dict[str, str] | None = None) -> Config:
     # ドライランの別名
     if _bool(env.get("CC_DRY_RUN", "0")) and "CC_SINK" not in env:
         cfg.sink = "fake"
+    cfg.prefer_codec = normalize_codec(cfg.prefer_codec)
     if cfg.sink not in SINKS:
         raise ValueError(f"CC_SINK は {SINKS} のどれか: {cfg.sink}")
     return cfg

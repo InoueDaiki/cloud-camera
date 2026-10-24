@@ -43,3 +43,21 @@ export function detectSupport(): PlaybackSupport {
   }
   return { engine: 'none', hevc: false };
 }
+
+export type VideoCodec = 'H.265' | 'H.264';
+
+/** シャドウの reported.codec("H265"、"H.265"、"HEVC"、"H264" など)を表示用の名前にする。不明なら null */
+export function normalizeCodec(codec: string | null | undefined): VideoCodec | null {
+  const c = (codec ?? '').toUpperCase().replace(/[.\-\s]/g, '');
+  if (c === 'H265' || c === 'HEVC') return 'H.265';
+  if (c === 'H264' || c === 'AVC') return 'H.264';
+  return null;
+}
+
+/**
+ * H.265 の可能性があるか(H.265 か、コーデックが分からない)。H.264 と分かっているカメラだけ false。
+ * 録画は撮ったときのコーデックのままなので、H.264 に切り替える前の録画は H.265 のことがある(そのときは再生時のエラーで案内する)。
+ */
+export function mayBeHevc(codec: string | null | undefined): boolean {
+  return normalizeCodec(codec) !== 'H.264';
+}

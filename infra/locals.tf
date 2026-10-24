@@ -15,6 +15,9 @@ locals {
 
   cameras = var.cameras != null ? toset(var.cameras) : toset(keys(local.camera_gateway))
 
+  # KVS ストリームの media type(カメラごと。既定 H.265)
+  kvs_media_types = { for c in local.cameras : c => lookup(var.camera_codecs, c, "H265") == "H264" ? "video/h264" : "video/h265" }
+
   # Glue のデータベース名はハイフンを使えないのでアンダースコアにする
   glue_database = replace(local.p, "-", "_")
   glue_table    = "detections"
@@ -46,6 +49,13 @@ locals {
   bedrock_base_model = local.bedrock_is_profile ? regex("^[^.]+\\.(.+)$", var.bedrock_model_id)[0] : var.bedrock_model_id
 
   stream_arn_pattern = "arn:${local.partition}:kinesisvideo:${local.region}:${local.account_id}:stream/${local.stream_name_prefix}*/*"
+}
+
+check "camera_codecs_known" {
+  assert {
+    condition     = length(setsubtract(keys(var.camera_codecs), local.cameras)) == 0
+    error_message = "var.camera_codecs に、var.cameras / gateways にないカメラがある。"
+  }
 }
 
 check "cameras_match_gateways" {

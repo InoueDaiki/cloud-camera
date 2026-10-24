@@ -2,6 +2,7 @@
 
 FFmpeg は 1 台につき 1 プロセスで、1 つの映像ソースから次の 3 つを出す:
   - main: H.265(libx265、CRF + vbv-maxrate の VBR、固定 GOP)→ rtsp://127.0.0.1:8554/cam{n}/main
+          カメラごとに H.264(libx264、同じ方式)にもできる(main_codec)
   - sub : H.264(libx264、低解像度)                              → rtsp://127.0.0.1:8554/cam{n}/sub
   - スナップショット: 1 秒ごとの JPEG(ファイルを上書き)
 
@@ -31,7 +32,7 @@ from pathlib import Path
 
 import yaml
 
-from .config import TEST_SOURCES, CameraConfig, EmulatorConfig
+from .config import TEST_SOURCES, CameraConfig, EmulatorConfig, StreamSettings
 from .ptz import CropWindow
 
 log = logging.getLogger(__name__)
@@ -116,7 +117,7 @@ def write_overlay_text(cfg: EmulatorConfig, cam: CameraConfig, ptz_line: str | N
     """
     name = cam.name.replace("\\", "\\\\").replace("%", "%%")
     text = (
-        f"{name}  {cam.main.width}x{cam.main.height}@{cam.main.fps}\n"
+        f"{name}  {cam.main.width}x{cam.main.height}@{cam.main.fps} {cam.main.codec}\n"
         r"%{pts:gmtime:0:%Y-%m-%dT%H\:%M\:%S}.%{eif:mod(floor(t*1000)\,1000):d:3}Z" "\n"
         r"frame %{frame_num}"
     )
@@ -193,6 +194,34 @@ def _input_args(cam: CameraConfig, size: tuple[int, int]) -> list[str]:
     return ["-re", "-f", "lavfi", "-i", f"{src}=size={size[0]}x{size[1]}:rate={m.fps}"]
 
 
+def main_encoder_args(m: StreamSettings, preset: str) -> list[str]:
+    """main のエンコーダー引数。どちらも CRF + 上限ビットレートの VBR、GOP 固定(シーンカットなし)、B フレームなし。
+
+    VPS/SPS/PPS(H.264 は SPS/PPS)をキーフレームごとに入れ、AUD を付ける(途中から受信したクライアントのため)。
+    """
+    if m.codec == "H265":
+        params = [
+            f"keyint={m.gov_length}",
+            f"min-keyint={m.gov_length}",
+            "scenecut=0",
+            "open-gop=0",
+            "repeat-headers=1",  # 途中から受信したクライアントでも VPS/SPS/PPS が届くように
+            "aud=1",
+            f"crf={m.crf}",
+            f"vbv-maxrate={m.bitrate_kbps}",
+            f"vbv-bufsize={m.bitrate_kbps * 2}",
+            "log-level=warning",
+        ]
+        return ["-c:v", "libx265", "-preset", preset, "-tune", "zerolatency", "-profile:v", "main",
+                "-pix_fmt", "yuv420p", "-x265-params", ":".join(params)]
+    # H.264(-bf 0 は zerolatency でも 0 だが明示する)
+    return ["-c:v", "libx264", "-preset", preset, "-tune", "zerolatency", "-profile:v", "high",
+            "-pix_fmt", "yuv420p", "-crf", str(m.crf),
+            "-maxrate", f"{m.bitrate_kbps}k", "-bufsize", f"{m.bitrate_kbps * 2}k",
+            "-g", str(m.gov_length), "-keyint_min", str(m.gov_length), "-sc_threshold", "0", "-bf", "0",
+            "-x264-params", "repeat-headers=1:aud=1"]
+
+
 def ffmpeg_command(cfg: EmulatorConfig, cam: CameraConfig, window: CropWindow | None = None) -> list[str]:
     """window は疑似 PTZ の現在の切り出し窓(FFmpeg の起動時の初期値。省略で等倍)。PTZ が無効なら使わない。"""
     m, s = cam.main, cam.sub
@@ -244,21 +273,6 @@ def ffmpeg_command(cfg: EmulatorConfig, cam: CameraConfig, window: CropWindow | 
         "[j]null[snap]"
     )
 
-    main_x265 = ":".join(
-        [
-            f"keyint={m.gov_length}",
-            f"min-keyint={m.gov_length}",
-            "scenecut=0",
-            "open-gop=0",
-            "repeat-headers=1",  # 途中から受信したクライアントでも VPS/SPS/PPS が届くように
-            "aud=1",
-            f"crf={m.crf}",
-            f"vbv-maxrate={m.bitrate_kbps}",
-            f"vbv-bufsize={m.bitrate_kbps * 2}",
-            "log-level=warning",
-        ]
-    )
-
     return [
         cfg.ffmpeg_bin,
         "-hide_banner",
@@ -269,15 +283,10 @@ def ffmpeg_command(cfg: EmulatorConfig, cam: CameraConfig, window: CropWindow | 
         "-stats_period", "5",
         *_input_args(cam, (sw, sh)),
         "-filter_complex", prep,
-        # ---- main(H.265)----
+        # ---- main(既定 H.265。カメラごとに H.264 も選べる)----
         "-map", "[main]",
         "-an",
-        "-c:v", "libx265",
-        "-preset", cam.preset,
-        "-tune", "zerolatency",
-        "-profile:v", "main",
-        "-pix_fmt", "yuv420p",
-        "-x265-params", main_x265,
+        *main_encoder_args(m, cam.preset),
         "-fps_mode", "passthrough",
         "-f", "rtsp", "-rtsp_transport", "tcp", f"{rtsp}/main",
         # ---- sub(H.264)----

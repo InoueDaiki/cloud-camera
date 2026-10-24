@@ -26,6 +26,9 @@ def test_diff_streaming_toggle():
 def test_diff_restart_on_config_change():
     changed = {**CAM, "profile_token": "sub"}
     assert diff_cameras({"cam-001": CAM}, {"cam-001": changed})["restart"] == ["cam-001"]
+    # コーデックの優先順位を変えたらパイプラインを作り直す
+    prefer = {**CAM, "prefer_codec": "H264"}
+    assert diff_cameras({"cam-001": CAM}, {"cam-001": prefer})["restart"] == ["cam-001"]
     assert diff_cameras({"cam-001": CAM}, {"cam-001": dict(CAM)}) == {
         "start": [], "stop": [], "restart": [], "remove": []}
 

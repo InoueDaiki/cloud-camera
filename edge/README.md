@@ -1,10 +1,11 @@
 # エッジゲートウェイ
 
-ONVIF カメラの H.265 を**再エンコードせずに** Kinesis Video Streams(KVS)へ送るコンテナ。
+ONVIF カメラの H.265(設定で H.264 も)を**再エンコードせずに** Kinesis Video Streams(KVS)へ送るコンテナ。
 Raspberry Pi 4(linux/arm64)向けで、Mac(Apple Silicon の Docker)でもそのまま動く。linux/amd64 もビルドできる。
 
 ```
 カメラ ──RTSP(H.265)──▶ rtspsrc ! rtph265depay ! h265parse ! video/x-h265,stream-format=hvc1 ! h265timestamper ! kvssink ──▶ KVS
+       (H.264 のとき)       rtph264depay ! h264parse ! video/x-h264,stream-format=avc ! h264timestamper
    ▲                                                                                                         (IoT 認証情報プロバイダー)
    └─ONVIF(WS-Discovery、Media2)── Python エージェント ──MQTT5──▶ AWS IoT Core(シャドウ、status、discovery、cmd)
 ```
@@ -16,7 +17,7 @@ Raspberry Pi 4(linux/arm64)向けで、Mac(Apple Silicon の Docker)でもその
 | `Dockerfile` | マルチステージ。producer-sdk-cpp **v3.6.0**(producer-c v1.6.2)の kvssink をビルドし、必要な GStreamer プラグインの .so だけを実行イメージに入れる(Debian trixie、約 260 MB) |
 | `agent/cc_edge/agent.py` | 本体。シャドウ(またはローカル設定)の差分適用、reported、status(30 秒)、cmd、discovery |
 | `agent/cc_edge/iot.py` | AWS IoT Device SDK v2(MQTT5)。LWT、再接続ごとの再購読 |
-| `agent/cc_edge/onvif.py` | 標準ライブラリだけの ONVIF クライアント。WS-Discovery、WS-Security Digest、Media2 で H.265 を自動選択、GetStreamUri |
+| `agent/cc_edge/onvif.py` | 標準ライブラリだけの ONVIF クライアント。WS-Discovery、WS-Security Digest、Media2 で H.265 を自動選択(`prefer_codec` で H.264 優先にも)、GetStreamUri |
 | `agent/cc_edge/ptz.py` | PTZ。ONVIF PTZ クライアント(GetServices で XAddr、プロファイルの PTZConfiguration、各操作)、cmd `ptz` の処理、`{p}/{gw}/ptz` への結果、シャドウの `reported.cameras.{id}.ptz` |
 | `agent/cc_edge/pipeline.py` | パイプラインの仕様と、子プロセスの監視・バックオフ付き再起動 |
 | `agent/cc_edge/runner.py` | 1 カメラ = 1 子プロセス。GStreamer を GI で組み、送信バイト数、GOP、KVS の ACK(永続化までの遅れ)を計測して JSON 行で親に渡す |
@@ -41,6 +42,7 @@ Raspberry Pi 4(linux/arm64)向けで、Mac(Apple Silicon の Docker)でもその
 | `CC_STATUS_INTERVAL` | `30` | status と `reported.last_seen` の間隔(秒) |
 | `CC_STALL_TIMEOUT` | `15` | この秒数カメラからフレームが来なければパイプラインを再起動(KVS 側の回線断では再起動しない) |
 | `CC_BACKOFF_INITIAL` / `CC_BACKOFF_MAX` | `2` / `60` | 再起動のバックオフ(30 秒以上動けば初期値に戻る) |
+| `CC_PREFER_CODEC` | `H265` | ONVIF でプロファイルを自動選択するときに優先するコーデック(`H265` / `H264`)。カメラごとにシャドウの `prefer_codec` で上書きできる。優先のコーデックがなければもう一方を使う([docs/codec.md](../docs/codec.md)) |
 | `CC_RTSP_PROTOCOLS` / `CC_RTSP_LATENCY_MS` | `tcp` / `200` | rtspsrc |
 | `CC_KVS_BUFFER_S` / `CC_KVS_STORAGE_SIZE_MB` | `600` / `128` | 回線断の間に溜める上限(秒 / MB、1 カメラあたり)。どちらかに達したら古い方から捨てる。下の「回線断とバッファ」 |
 | `CC_KVS_CONNECTION_STALENESS_S` / `CC_KVS_REPLAY_S` | `30` / `60` | ACK が途絶えて接続を張り直すまでの秒数 / 張り直したときに巻き戻して送り直す最大の秒数 |
@@ -147,7 +149,9 @@ API(`POST .../ptz`、202 まで約 50 ms)→ IoT Core → エッジ → ONVIF �
 
 ## 確かめた挙動(2026-10-24、ap-northeast-1)
 
-- kvssink は H.265 の caps(`video/x-h265`)を見て codec-id `V_MPEGH/ISO/HEVC`、content-type `video/h265` を自動で設定する
+- kvssink は H.265 の caps(`video/x-h265`)を見て codec-id `V_MPEGH/ISO/HEVC`、content-type `video/h265` を自動で設定する。
+  H.264(`video/x-h264`)なら codec-id は既定の `V_MPEG4/ISO/AVC`、content-type `video/h264`(producer-sdk-cpp v3.6.0 の
+  `gstkvssink.cpp` の `init_track_data`。H.264 は `stream-format=avc` の `codec_data`(avcC)がコーデックプライベートデータになる)
 - **kvssink は NAL 変換をしない**(`nal_adaptation_flags=0`)。コーデックプライベートデータは caps の `codec_data` からだけ取るので、
   h265parse の出力を `stream-format=hvc1`(HEVCDecoderConfigurationRecord)に固定する必要がある
 - **RTSP から取り出したフレームには DTS がない**。kvssink は「HEADER フラグ(VPS/SPS/PPS を含む)で DTS が無効」なバッファを捨てるため、

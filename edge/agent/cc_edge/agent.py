@@ -24,7 +24,7 @@ def utc_now() -> str:
 
 def _conf_key(conf: dict) -> str:
     """パイプラインの作り直しが要る設定だけを比較する(streaming は別に扱う)。"""
-    keys = ("onvif_url", "username", "password", "profile_token", "rtsp_url", "codec")
+    keys = ("onvif_url", "username", "password", "profile_token", "prefer_codec", "rtsp_url", "codec")
     return json.dumps({k: conf.get(k) for k in keys}, sort_keys=True)
 
 
@@ -82,7 +82,8 @@ class CameraWorker:
             if self.info is None or attempt % 3 == 0:
                 cli = onvif.OnvifClient(c["onvif_url"], c.get("username", ""), c.get("password", ""))
                 try:
-                    self.info = await asyncio.to_thread(cli.resolve, c.get("profile_token"))
+                    self.info = await asyncio.to_thread(cli.resolve, c.get("profile_token"),
+                                                        c.get("prefer_codec") or self.cfg.prefer_codec)
                     self.resolve_error = None
                     log.info("[%s] ONVIF: profile=%s codec=%s %dx%d %s", self.camera_id,
                              self.info.profile_token, self.info.codec, self.info.width,
@@ -320,7 +321,8 @@ class Agent:
             # 指定したデバイスのプロファイル一覧を discovery トピックに返す
             cli = onvif.OnvifClient(msg["onvif_url"], msg.get("username", ""), msg.get("password", ""))
             try:
-                info = await asyncio.to_thread(cli.resolve, msg.get("profile_token"))
+                info = await asyncio.to_thread(cli.resolve, msg.get("profile_token"),
+                                               msg.get("prefer_codec") or self.cfg.prefer_codec)
                 result = {"onvif_url": msg["onvif_url"], "selected": info.to_dict()}
             except Exception as e:  # noqa: BLE001
                 result = {"onvif_url": msg["onvif_url"], "error": str(e)}

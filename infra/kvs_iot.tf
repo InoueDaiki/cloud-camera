@@ -6,7 +6,7 @@ resource "aws_kinesis_video_stream" "camera" {
 
   name                    = "${local.stream_name_prefix}${each.key}"
   data_retention_in_hours = var.kvs_retention_hours
-  media_type              = "video/h265"
+  media_type              = local.kvs_media_types[each.key]
 }
 
 # ---------------------------------------------------------------------------

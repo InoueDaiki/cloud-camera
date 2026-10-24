@@ -3,7 +3,7 @@
 - WS-Discovery(UDP マルチキャスト 239.255.255.250:3702 への Probe)
 - WS-Security UsernameToken(PasswordDigest)
 - Device: GetSystemDateAndTime(時刻差の補正)、GetServices(Media2 / Media の XAddr)
-- Media2: GetProfiles、GetStreamUri(H.265 のプロファイルを自動選択)
+- Media2: GetProfiles、GetStreamUri(H.265 のプロファイルを自動選択。設定で H.264 優先にもできる)
 - Media2 がないカメラは Media(ver10)にフォールバックする
 """
 
@@ -262,11 +262,11 @@ class OnvifClient:
             raise OnvifError("GetStreamUri の応答に Uri がない")
         return _rewrite_host(uri, self.device_url)
 
-    def resolve(self, profile_token: str | None = None) -> StreamInfo:
-        """プロファイルを選び(指定がなければ H.265 で最大解像度)、RTSP URL を返す。"""
+    def resolve(self, profile_token: str | None = None, prefer_codec: str = "H265") -> StreamInfo:
+        """プロファイルを選び(指定がなければ prefer_codec、既定 H.265 で最大解像度)、RTSP URL を返す。"""
         self.sync_clock()
         version, profiles = self.get_profiles()
-        prof = select_profile(profiles, profile_token)
+        prof = select_profile(profiles, profile_token, prefer_codec)
         uri = self.get_stream_uri(version, prof.token)
         return StreamInfo(rtsp_url=uri, profile_token=prof.token, codec=prof.encoding,
                           width=prof.width, height=prof.height, media_version=version,
@@ -328,7 +328,22 @@ def parse_media1_profiles(body: ET.Element) -> list[Profile]:
     return out
 
 
-def select_profile(profiles: list[Profile], token: str | None = None) -> Profile:
+CODECS = ("H265", "H264")
+
+
+def normalize_codec(v: str | None, default: str = "H265") -> str:
+    """"h265" / "H.265" / "HEVC" → "H265"、"h264" / "H.264" / "AVC" → "H264"。空なら default。"""
+    if not v:
+        return default
+    c = _norm_encoding(v).replace("-", "")
+    if c not in CODECS:
+        raise ValueError(f"対応していないコーデック {v!r}(H265 か H264)")
+    return c
+
+
+def select_profile(profiles: list[Profile], token: str | None = None, prefer: str = "H265") -> Profile:
+    """プロファイルを選ぶ。token の指定があればそれ。なければ prefer のコーデック(既定 H.265)で最大解像度、
+    なければもう一方のコーデックで最大解像度。"""
     if not profiles:
         raise OnvifError("プロファイルがない")
     if token:
@@ -336,14 +351,14 @@ def select_profile(profiles: list[Profile], token: str | None = None) -> Profile
             if p.token == token:
                 return p
         raise OnvifError(f"プロファイル {token} が見つからない")
-    h265 = [p for p in profiles if p.encoding == "H265"]
-    if h265:
-        return max(h265, key=lambda p: p.width * p.height)
-    # H.265 がなければ H.264(再エンコードしないので、そのまま送る。reported.codec で分かる)
-    h264 = [p for p in profiles if p.encoding == "H264"]
-    if h264:
-        log.warning("H.265 のプロファイルがない。H.264 を使う")
-        return max(h264, key=lambda p: p.width * p.height)
+    prefer = normalize_codec(prefer)
+    for codec in (prefer, *(c for c in CODECS if c != prefer)):
+        cands = [p for p in profiles if p.encoding == codec]
+        if cands:
+            if codec != prefer:
+                # 再エンコードしないので、そのまま送る。reported.codec で分かる
+                log.warning("%s のプロファイルがない。%s を使う", prefer, codec)
+            return max(cands, key=lambda p: p.width * p.height)
     raise OnvifError("H.265 / H.264 のプロファイルがない: "
                      + ", ".join(f"{p.token}={p.encoding}" for p in profiles))
 

@@ -5,6 +5,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { IconAlertCircle } from '@tabler/icons-react';
 import { api } from '../api/client';
 import type { Camera, CamerasResponse } from '../api/types';
+import { normalizeCodec } from '../lib/codec';
 import { formatDuration, formatHm, parseTime } from '../lib/time';
 import classes from './CameraList.module.css';
 
@@ -88,7 +89,7 @@ function CameraItem({ camera: c, selected, now, onSelect }: { camera: Camera; se
           <Text size="xs" c="dimmed" ml={16}>
             {c.camera_id}
             {c.resolution ? ` · ${c.resolution}` : ''}
-            {c.codec ? ` · ${c.codec}` : ''}
+            {c.codec ? ` · ${normalizeCodec(c.codec) ?? c.codec}` : ''}
           </Text>
         </div>
         <Tooltip label={desired ? '配信を停止' : '配信を開始'} position="left">

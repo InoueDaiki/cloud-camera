@@ -36,10 +36,15 @@ variable "cameras" {
   default     = null
 }
 
-variable "camera_names" {
-  description = "カメラ ID → 表示名(例 {\"cam-001\" = \"玄関\"})。自然言語検索が「玄関」などの名前をカメラ ID に結びつけるのに使う"
+variable "camera_codecs" {
+  description = "カメラ ID → 映像コーデック(H265 / H264)。KVS ストリームの media type(video/h265 / video/h264)に使う。書いていないカメラは H265(docs/codec.md)"
   type        = map(string)
   default     = {}
+
+  validation {
+    condition     = alltrue([for c in values(var.camera_codecs) : contains(["H265", "H264"], c)])
+    error_message = "camera_codecs の値は H265 か H264 にする。"
+  }
 }
 
 variable "kvs_retention_hours" {
