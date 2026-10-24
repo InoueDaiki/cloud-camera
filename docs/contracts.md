@@ -166,9 +166,30 @@ MQTT のクライアント ID は Thing 名。LWT のトピックがポリシー
 
 | トピック | 向き | 内容 |
 | --- | --- | --- |
-| `{p}/{gw}/status` | エッジ → クラウド | 30 秒ごとの死活。`{"ts", "online": true, "gateway_id", "cameras": {"cam-001": {"streaming", "uptime_s", "bytes_sent", "restarts", "gop_s", "persist_latency_ms", "error"}}}`。LWT(異常切断と正常終了の両方)で `{"online": false, "gateway_id"}` |
+| `{p}/{gw}/status` | エッジ → クラウド | 30 秒ごとの死活。`{"ts", "online": true, "gateway_id", "cameras": {"cam-001": {"streaming", "uptime_s", "bytes_sent", "restarts", "gop_s", "persist_latency_ms", "error", "buffer", "last_exit"}}}`(`buffer` は下記)。LWT(異常切断と正常終了の両方)で `{"online": false, "gateway_id"}` |
 | `{p}/{gw}/discovery` | エッジ → クラウド | WS-Discovery の結果 `{"ts", "gateway_id", "request_id"?, "devices": [{"urn", "types", "scopes", "xaddrs", "from"}]}`。`probe` の結果は `{"probe": {"onvif_url", "selected" or "error"}}` |
 | `{p}/{gw}/cmd` | クラウド → エッジ | 単発コマンド。`{"action": "discover"}`、`{"action": "probe", "onvif_url", "username", "password"}`、`{"action": "restart", "camera_id"?}`、`{"action": "status"}`、`{"action": "reload"}`(シャドウを取り直す)。`request_id` を付けると応答に入る |
+
+status の `cameras.*.buffer`(回線断のバッファ。`sink=kvs` のときだけ、それ以外は null。値は kvssink のキーフレームごとの計測値):
+
+| キー | 内容 |
+| --- | --- |
+| `unsent_s` / `unsent_bytes` | まだ KVS に送っていない映像の長さ(秒)とバイト数。回線断の間は増え続け、復旧後に 0 に戻る |
+| `buffered_s` / `buffered_bytes` | バッファ全体(送ったが永続化の ACK がまだのぶんを含む) |
+| `store_used_bytes` | kvssink のメモリ(コンテンツストア)の使用量 |
+| `limit_s` / `limit_bytes` | バッファの上限(既定 600 秒 / 128MB)。どちらかに達すると古い方から捨てる |
+| `persisted_lag_s` | 最後に永続化された断片のプロデューサー時刻から今までの秒数(クラウドから見た遅れ。平常時 2 秒前後) |
+| `dropped_frames` | バッファがあふれて送らずに捨てたフレームの累計(パイプラインの再起動をまたいで加算) |
+| `kvs_errors` | KVS への送信エラーの累計(回線断など。これではパイプラインを再起動しない) |
+| `sessions` / `stale_events` / `error_acks` | PutMedia の接続回数、ACK が途絶えて接続を張り直した回数、エラー ACK の数(今の子プロセスの中での累計) |
+
+`last_exit` は直近のパイプライン再起動の理由 `{"code", "ts", "reason"}`(なければ null)。
+
+**回線断のときのエッジの約束**: 回線断(KVS・IoT Core に届かない)の間も、エッジはパイプラインを止めずに映像を kvssink のメモリに溜め、
+復旧後に元のプロデューサー時刻のまま送り直す。既定で約 10 分(`limit_s`)まで吸収し、それより長い断は古い方から欠落する。
+送り直しは古い順(プロデューサー時刻の昇順)で、同じ断片の重複は試験では見られなかった。
+遮断開始から送り終わるまでの遅れは最大で「断の長さ(上限 600 秒)+ 追いつきの時間」。
+実測は [edge/README.md](../edge/README.md) の「回線断とバッファ」。
 
 ## HTTP API(API Gateway HTTP API、パス接頭辞 `/api`)
 

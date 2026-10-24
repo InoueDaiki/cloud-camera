@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# 検証用の一時 AWS リソース(名前は cc-tmp-edge- で始まる)を作る / 消す。
+# 検証用の一時 AWS リソース(名前は TMP_PROJECT。既定 cc-tmp-edge)を作る / 消す。
+# 並行して別の検証をするときは TMP_PROJECT を変える(例: TMP_PROJECT=cc-tmp-edgebuf)。
 # Terraform(infra/)を使わずにエッジ単体を実 AWS で試すためのもの。
 #
 #   edge/scripts/tmp-aws.sh up     # 作成して edge/.certs/gw-001/ に証明書と config.json を書く
 #   edge/scripts/tmp-aws.sh down   # すべて削除
 #   edge/scripts/tmp-aws.sh check  # 残っているものを表示
+#   TMP_PROJECT=cc-tmp-edgebuf edge/scripts/tmp-aws.sh up   # 名前を変える(cc-tmp- で始めること)
 #
 # 作るもの: IAM ロール + ロールエイリアス(認証情報プロバイダー用)、IoT ポリシー、Thing、証明書、
 #           KVS ストリーム(保持 1 時間)
@@ -22,7 +24,7 @@ ROLE="$P-kvs-role"
 ALIAS="$P-kvs-role-alias"
 POLICY="$P-policy"
 
-[[ "$P" == cc-tmp-edge* ]] || { echo "TMP_PROJECT は cc-tmp-edge で始めること" >&2; exit 1; }
+[[ "$P" == cc-tmp-* ]] || { echo "TMP_PROJECT は cc-tmp- で始めること" >&2; exit 1; }
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 
 up() {
@@ -129,10 +131,10 @@ down() {
 
 check() {
   echo "== 残っている $P リソース(空なら削除済み)"
-  aws iot list-things --query "things[?starts_with(thingName,'$P')].thingName" --output text
-  aws iot list-policies --query "policies[?starts_with(policyName,'$P')].policyName" --output text
-  aws iot list-role-aliases --query "roleAliases[?starts_with(@,'$P')]" --output text
-  aws iam list-roles --query "Roles[?starts_with(RoleName,'$P')].RoleName" --output text
+  aws iot list-things --query "things[?starts_with(thingName,'$P-')].thingName" --output text
+  aws iot list-policies --query "policies[?starts_with(policyName,'$P-')].policyName" --output text
+  aws iot list-role-aliases --query "roleAliases[?starts_with(@,'$P-')]" --output text
+  aws iam list-roles --query "Roles[?starts_with(RoleName,'$P-')].RoleName" --output text
   aws kinesisvideo list-streams --stream-name-condition "ComparisonOperator=BEGINS_WITH,ComparisonValue=$P-" \
     --query 'StreamInfoList[].[StreamName,Status]' --output text
 }

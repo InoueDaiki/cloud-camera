@@ -105,7 +105,9 @@ class CameraWorker:
             iot_credential_endpoint=cfg.iot_credential_endpoint, cert_path=cfg.cert_path,
             key_path=cfg.key_path, ca_path=cfg.ca_path, role_alias=cfg.role_alias,
             thing_name=cfg.thing, retention_hours=cfg.kvs_retention_hours,
-            storage_size_mb=cfg.kvs_storage_size_mb, log_config=cfg.kvs_log_config,
+            storage_size_mb=cfg.kvs_storage_size_mb, buffer_duration_s=cfg.kvs_buffer_s,
+            connection_staleness_s=cfg.kvs_connection_staleness_s, replay_duration_s=cfg.kvs_replay_s,
+            framerate=cfg.kvs_framerate, log_config=cfg.kvs_log_config,
             output_path=out, latency_ms=cfg.rtsp_latency_ms, protocols=cfg.rtsp_protocols,
             stall_timeout_s=cfg.stall_timeout_s,
         )
@@ -150,6 +152,9 @@ class CameraWorker:
             "gop_s": st.get("gop_s"),
             "persist_latency_ms": st.get("persist_latency_ms"),
             "error": self.reported()["error"],
+            # 回線断のバッファ(kvssink のときだけ。それ以外は null)。項目は docs/contracts.md
+            "buffer": self.sup.buffer_status(),
+            "last_exit": self.sup.last_exit,
         }
 
 
@@ -267,11 +272,12 @@ class Agent:
     async def _status_loop(self) -> None:
         while not self._stop.is_set():
             payload = self.status_payload()
+            # 回線断で publish が待たされても計測値がログに残るよう、先にログに出す
+            log.info("status: %s", json.dumps(payload, ensure_ascii=False))
             if self.iot:
                 await self.iot.publish(self.iot.t_status, payload, qos=0)
                 # ビューワーのオンライン表示用。異常終了は API 側で now - last_seen > 90 秒をオフラインとみなす
                 await self.publish_presence(True, payload["ts"])
-            log.info("status: %s", json.dumps(payload, ensure_ascii=False))
             try:
                 await asyncio.wait_for(self._stop.wait(), self.cfg.status_interval_s)
             except TimeoutError:

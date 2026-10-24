@@ -53,7 +53,12 @@ class Config:
     backoff_initial_s: float = 2.0
     backoff_max_s: float = 60.0
     kvs_retention_hours: int = 1  # kvssink がストリームを自動作成する場合だけ効く
-    kvs_storage_size_mb: int = 64  # kvssink のバッファ(1 カメラあたり)
+    # 回線断の間 kvssink のメモリに溜める上限(1 カメラあたり)。既定は約 10 分(1.5Mbps で約 110MB)
+    kvs_storage_size_mb: int = 128
+    kvs_buffer_s: int = 600
+    kvs_connection_staleness_s: int = 30
+    kvs_replay_s: int = 0  # 0 ならバッファと同じ長さ
+    kvs_framerate: int = 0  # 0 なら 30 で見積もる(バッファの枠 = framerate × kvs_buffer_s)
     kvs_log_config: str = "/opt/kvs/kvs_log_configuration"
 
     # シャドウを使わないときのカメラ設定(シャドウの desired.cameras と同じ形)
@@ -119,6 +124,10 @@ _ENV = {
     "CC_BACKOFF_MAX": "backoff_max_s",
     "CC_KVS_RETENTION_HOURS": "kvs_retention_hours",
     "CC_KVS_STORAGE_SIZE_MB": "kvs_storage_size_mb",
+    "CC_KVS_BUFFER_S": "kvs_buffer_s",
+    "CC_KVS_CONNECTION_STALENESS_S": "kvs_connection_staleness_s",
+    "CC_KVS_REPLAY_S": "kvs_replay_s",
+    "CC_KVS_FRAMERATE": "kvs_framerate",
     "CC_KVS_LOG_CONFIG": "kvs_log_config",
     "CC_LOG_LEVEL": "log_level",
 }

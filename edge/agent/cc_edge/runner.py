@@ -33,6 +33,69 @@ from .pipeline import PipelineSpec  # noqa: E402
 ACK_TYPES = {0: "UNDEFINED", 1: "BUFFERING", 2: "RECEIVED", 3: "PERSISTED", 4: "ERROR", 5: "IDLE"}
 
 
+class _StreamMetrics(ctypes.Structure):
+    # amazon-kinesis-video-streams-pic v1.3.1 の struct __StreamMetrics(STREAM_METRICS_CURRENT_VERSION = 3)
+    _fields_ = [
+        ("version", ctypes.c_uint32),
+        ("current_view_duration", ctypes.c_uint64),  # 未送信ぶん(head - current)。100ns
+        ("overall_view_duration", ctypes.c_uint64),  # バッファ全体(head - tail)。100ns
+        ("current_view_size", ctypes.c_uint64),
+        ("overall_view_size", ctypes.c_uint64),
+        ("current_frame_rate", ctypes.c_double),
+        ("current_transfer_rate", ctypes.c_uint64),
+        ("uptime", ctypes.c_uint64),
+        ("transferred_bytes", ctypes.c_uint64),
+        ("total_sessions", ctypes.c_uint64),
+        ("total_active_sessions", ctypes.c_uint64),
+        ("avg_session_duration", ctypes.c_uint64),
+        ("buffered_acks", ctypes.c_uint64),
+        ("received_acks", ctypes.c_uint64),
+        ("persisted_acks", ctypes.c_uint64),
+        ("error_acks", ctypes.c_uint64),
+        ("dropped_frames", ctypes.c_uint64),
+        ("dropped_fragments", ctypes.c_uint64),
+        ("skipped_frames", ctypes.c_uint64),
+        ("storage_pressures", ctypes.c_uint64),
+        ("latency_pressures", ctypes.c_uint64),
+        ("buffer_pressures", ctypes.c_uint64),
+        ("stale_events", ctypes.c_uint64),
+        ("put_frame_errors", ctypes.c_uint64),
+        ("cpl_api_call_latency", ctypes.c_uint64),
+        ("data_api_call_latency", ctypes.c_uint64),
+        ("elementary_frame_rate", ctypes.c_double),
+        ("stream_api_call_retry_count", ctypes.c_uint32),
+    ]
+
+
+class _ClientMetrics(ctypes.Structure):
+    # struct __ClientMetrics(CLIENT_METRICS_CURRENT_VERSION = 2)
+    _fields_ = [
+        ("version", ctypes.c_uint32),
+        ("client_avg_api_call_retry_count", ctypes.c_double),
+        ("content_store_size", ctypes.c_uint64),
+        ("content_store_available_size", ctypes.c_uint64),
+        ("content_store_allocated_size", ctypes.c_uint64),
+        ("total_content_views_size", ctypes.c_uint64),
+        ("total_frame_rate", ctypes.c_uint64),
+        ("total_transfer_rate", ctypes.c_uint64),
+        ("total_elementary_frame_rate", ctypes.c_double),
+    ]
+
+
+class _KvsSinkMetric(ctypes.Structure):
+    # producer-sdk-cpp v3.6.0 の struct _KvsSinkMetric。KinesisVideoStreamMetrics / KinesisVideoProducerMetrics は
+    # 仮想関数を持たず、中身は StreamMetrics / ClientMetrics の構造体 1 つだけなので、そのまま並ぶ
+    _fields_ = [
+        ("stream", _StreamMetrics),
+        ("client", _ClientMetrics),
+        ("frame_pts", ctypes.c_uint64),
+        ("on_first_frame", ctypes.c_bool),
+    ]
+
+
+HNS = 10_000_000  # 100ns 単位 → 秒
+
+
 class _FragmentAck(ctypes.Structure):
     # amazon-kinesis-video-streams-pic の struct __FragmentAck
     _fields_ = [
@@ -79,7 +142,13 @@ class Runner:
         self.persist_latency_ms: list[float] = []
         self.acks = {"BUFFERING": 0, "RECEIVED": 0, "PERSISTED": 0, "ERROR": 0}
         self.kvs_errors = 0
+        self.kvs_error_codes: dict[str, int] = {}
         self.no_dts = 0
+        # kvssink(producer SDK)のバッファの計測値。キーフレームごとに stream-client-metric で更新
+        self.kvs_metrics: dict | None = None
+        self.metrics_error: str | None = None
+        self.dropped_frames_reported = 0
+        self.last_persisted_ts_ms: int | None = None  # 最後に永続化された断片のプロデューサー時刻
         self.pipeline = self._build()
 
     # --- 組み立て ---------------------------------------------------------
@@ -115,17 +184,22 @@ class Runner:
                            max_size_time=5 * Gst.SECOND, leaky=2)
         elems = [self.depay, parse, caps, stamper, queue]
         if s.sink == "kvs":
+            # バッファ(回線断の吸収)の設定。意味と値の理由は edge/README.md の「回線断とバッファ」
             sink = self._make("kvssink", "sink", stream_name=s.stream_name, aws_region=s.region,
                               retention_period=s.retention_hours, storage_size=s.storage_size_mb,
-                              log_config=s.log_config, framerate=s.framerate or 25,
+                              log_config=s.log_config, framerate=s.kvs_framerate(),
                               key_frame_fragmentation=True, fragment_duration=2000,
-                              restart_on_error=True)
+                              buffer_duration=s.buffer_duration_s, max_latency=s.max_latency_s(),
+                              connection_staleness=s.connection_staleness_s,
+                              replay_duration=s.replay_s(),
+                              restart_on_error=True, fragment_acks=True, get_kvs_metrics=True)
             iot = Gst.Structure.new_from_string(s.iot_certificate_structure())
             if iot is None:
                 raise RuntimeError("iot-certificate の構造体を作れない")
             sink.set_property("iot-certificate", iot)
             sink.connect("stream-error", self._on_stream_error)
             sink.connect("fragment-ack", self._on_fragment_ack)
+            sink.connect("stream-client-metric", self._on_metric)
             elems.append(sink)
         elif s.sink == "file":
             mux = self._make("matroskamux", "mux", streamable=True)
@@ -202,8 +276,41 @@ class Runner:
         return Gst.PadProbeReturn.OK
 
     def _on_stream_error(self, _sink, code: int) -> None:
+        # KVS への送信側のエラー(回線断を含む)。kvssink が自分で再接続するので、ここでは数えるだけ
         self.kvs_errors += 1
-        emit({"type": "kvs_error", "code": f"0x{code:08x}"})
+        c = f"0x{code:08x}"
+        self.kvs_error_codes[c] = self.kvs_error_codes.get(c, 0) + 1
+        emit({"type": "kvs_error", "code": c})
+
+    def _on_metric(self, _sink, ptr) -> None:
+        # ストリーミングスレッドからキーフレームごとに呼ばれる。読むだけで重い処理はしない
+        try:
+            m = _KvsSinkMetric.from_address(_pointer_address(ptr))
+            st, cl = m.stream, m.client
+            if st.version != 3 or cl.version != 2:
+                raise ValueError(f"版が違う(stream={st.version}, client={cl.version})")
+            self.kvs_metrics = {
+                "unsent_s": round(st.current_view_duration / HNS, 1),
+                "buffered_s": round(st.overall_view_duration / HNS, 1),
+                "unsent_bytes": st.current_view_size,
+                "buffered_bytes": st.overall_view_size,
+                "store_used_bytes": cl.content_store_size - cl.content_store_available_size,
+                "store_size_bytes": cl.content_store_size,
+                "dropped_frames": st.dropped_frames,
+                "skipped_frames": st.skipped_frames,
+                "put_frame_errors": st.put_frame_errors,
+                "error_acks": st.error_acks,
+                "sessions": st.total_sessions,
+                "stale_events": st.stale_events,
+                "latency_pressures": st.latency_pressures,
+                "storage_pressures": st.storage_pressures,
+                "buffer_pressures": st.buffer_pressures,
+                "transfer_bps": st.current_transfer_rate * 8,
+            }
+        except Exception as e:  # noqa: BLE001
+            if self.metrics_error is None:
+                self.metrics_error = str(e)
+                emit({"type": "metrics_error", "message": str(e)})
 
     def _on_fragment_ack(self, _sink, ptr) -> None:
         try:
@@ -217,6 +324,8 @@ class Runner:
         if kind in self.acks:
             self.acks[kind] += 1
         if kind == "PERSISTED":
+            if self.last_persisted_ts_ms is None or ack.timestamp > self.last_persisted_ts_ms:
+                self.last_persisted_ts_ms = ack.timestamp
             # timestamp はフラグメントの先頭のタイムコード(絶対時刻、ミリ秒)
             lat = time.time() * 1000 - ack.timestamp
             if 0 < lat < 3_600_000:
@@ -229,7 +338,10 @@ class Runner:
         t = msg.type
         if t == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
-            emit({"type": "error", "source": msg.src.get_name() if msg.src else "",
+            src = msg.src.get_name() if msg.src else ""
+            # side: どちら側の異常か。kvssink が ERROR を出すのは再試行しても直らないエラー(認証、ストリームなし等)だけで、
+            # 回線断は kvssink の中で再接続される(ここには来ない)
+            emit({"type": "error", "source": src, "side": "kvs" if src == "sink" else "camera",
                   "message": err.message, "debug": (dbg or "")[:500]})
             self.exit_code = 2
             self.loop.quit()
@@ -243,6 +355,27 @@ class Runner:
         elif t == Gst.MessageType.WARNING:
             err, _dbg = msg.parse_warning()
             emit({"type": "warning", "source": msg.src.get_name() if msg.src else "", "message": err.message})
+
+    def _buffer_stats(self) -> dict | None:
+        """status の buffer に載せる値。kvssink 以外では None。"""
+        if self.spec.sink != "kvs":
+            return None
+        out: dict = dict(self.kvs_metrics or {})
+        # クラウドから見た遅れ: 最後に永続化された断片のプロデューサー時刻から今まで
+        out["persisted_lag_s"] = (None if self.last_persisted_ts_ms is None
+                                  else round(time.time() - self.last_persisted_ts_ms / 1000, 1))
+        out["limit_s"] = self.spec.buffer_duration_s
+        out["limit_bytes"] = self.spec.storage_size_mb * 1024 * 1024
+        dropped = int(out.get("dropped_frames") or 0)
+        if dropped > self.dropped_frames_reported:
+            # バッファがあふれて、送っていない古いフレームが捨てられた(古い方から捨てる)
+            emit({"type": "buffer_overflow", "dropped_frames": dropped,
+                  "new": dropped - self.dropped_frames_reported,
+                  "unsent_s": out.get("unsent_s"), "store_used_bytes": out.get("store_used_bytes")})
+            self.dropped_frames_reported = dropped
+        if self.kvs_error_codes:
+            out["kvs_errors"] = dict(self.kvs_error_codes)
+        return out
 
     def _tick(self) -> bool:
         now = time.monotonic()
@@ -258,9 +391,13 @@ class Runner:
                 {"n": len(lat), "avg": round(sum(lat) / len(lat)), "max": round(max(lat)), "min": round(min(lat))}
                 if lat else None
             ),
+            "buffer": self._buffer_stats(),
         })
         self.persist_latency_ms = []
-        # 一定時間バッファが来なければ再起動してもらう(rtspsrc が固まる対策)
+        # 一定時間バッファが来なければ再起動してもらう(rtspsrc が固まる対策)。
+        # 見ているのは kvssink の手前(h26Xtimestamper の出力)なので、カメラ側(RTSP)の異常だけを拾う。
+        # KVS への送信が止まっても(回線断)フレームはここを流れ続けるので、再起動しない
+        # (再起動すると kvssink のメモリ上のバッファが消える)
         ref = self.last_buffer_mono if self.last_buffer_mono is not None else self.started_mono
         limit = self.spec.stall_timeout_s * (1 if self.last_buffer_mono is not None else 2)
         if now - ref > limit:

@@ -20,7 +20,8 @@ Raspberry Pi 4(linux/arm64)向けで、Mac(Apple Silicon の Docker)でもその
 | `agent/cc_edge/ptz.py` | PTZ。ONVIF PTZ クライアント(GetServices で XAddr、プロファイルの PTZConfiguration、各操作)、cmd `ptz` の処理、`{p}/{gw}/ptz` への結果、シャドウの `reported.cameras.{id}.ptz` |
 | `agent/cc_edge/pipeline.py` | パイプラインの仕様と、子プロセスの監視・バックオフ付き再起動 |
 | `agent/cc_edge/runner.py` | 1 カメラ = 1 子プロセス。GStreamer を GI で組み、送信バイト数、GOP、KVS の ACK(永続化までの遅れ)を計測して JSON 行で親に渡す |
-| `scripts/tmp-aws.sh` | Terraform を使わずに実 AWS で試すための一時リソース(`cc-tmp-edge-*`)の作成・削除 |
+| `scripts/tmp-aws.sh` | Terraform を使わずに実 AWS で試すための一時リソース(既定 `cc-tmp-edge-*`、`TMP_PROJECT` で変更)の作成・削除 |
+| `scripts/outage-test.sh`、`scripts/outage/` | 回線断試験(エッジから AWS への通信だけを iptables で遮断し、復旧後の ListFragments を集計) |
 | `tests/` | 単体テスト(ONVIF は SOAP を返す小さな HTTP サーバーで検証) |
 
 ## 設定
@@ -38,10 +39,13 @@ Raspberry Pi 4(linux/arm64)向けで、Mac(Apple Silicon の Docker)でもその
 | `CC_CAMERAS` | | JSON。シャドウの `desired.cameras` と同じ形。`rtsp_url` を書けば ONVIF を省略 |
 | `CC_SINK` | `kvs` | `kvs` / `fake`(ドライラン)/ `file`(ドライラン、`CC_OUTPUT_DIR` に MKV)。`CC_DRY_RUN=1` は `fake` の別名 |
 | `CC_STATUS_INTERVAL` | `30` | status と `reported.last_seen` の間隔(秒) |
-| `CC_STALL_TIMEOUT` | `15` | この秒数フレームが来なければパイプラインを再起動 |
+| `CC_STALL_TIMEOUT` | `15` | この秒数カメラからフレームが来なければパイプラインを再起動(KVS 側の回線断では再起動しない) |
 | `CC_BACKOFF_INITIAL` / `CC_BACKOFF_MAX` | `2` / `60` | 再起動のバックオフ(30 秒以上動けば初期値に戻る) |
 | `CC_RTSP_PROTOCOLS` / `CC_RTSP_LATENCY_MS` | `tcp` / `200` | rtspsrc |
-| `CC_KVS_STORAGE_SIZE_MB` / `CC_KVS_RETENTION_HOURS` | `64` / `1` | kvssink のバッファ / ストリームを自動作成するときの保持期間 |
+| `CC_KVS_BUFFER_S` / `CC_KVS_STORAGE_SIZE_MB` | `600` / `128` | 回線断の間に溜める上限(秒 / MB、1 カメラあたり)。どちらかに達したら古い方から捨てる。下の「回線断とバッファ」 |
+| `CC_KVS_CONNECTION_STALENESS_S` / `CC_KVS_REPLAY_S` | `30` / `60` | ACK が途絶えて接続を張り直すまでの秒数 / 張り直したときに巻き戻して送り直す最大の秒数 |
+| `CC_KVS_FRAMERATE` | `0`(30 とみなす) | kvssink の framerate。バッファの枠(フレーム数)= framerate × `CC_KVS_BUFFER_S` なので実際の fps 以上にする |
+| `CC_KVS_RETENTION_HOURS` | `1` | ストリームを自動作成するときの保持期間 |
 | `CC_LOG_LEVEL` | `INFO` | `DEBUG` で 5 秒ごとの計測値も出る。kvssink 自体のログは `/opt/kvs/kvs_log_configuration`(既定 WARN) |
 
 ## Mac で動かす(リポジトリ直下で)

@@ -1,0 +1,24 @@
+# 回線断試験(edge/scripts/outage-test.sh)用の上書き。リポジトリ直下の compose.yaml に重ねて使う。
+#
+#   docker compose -p cc-edgebuf -f compose.yaml -f edge/scripts/outage/compose.yaml up -d
+#
+# - 別のプロジェクト名(-p)で、ホストのポートを公開しない(他の検証と並べて動かせるように)
+# - エミュレーターは 1 台、エッジは実 KVS に送り、シャドウで配信を制御する
+# - エッジだけの通信を遮断する仕組みは outage-test.sh(エッジと同じネットワーク名前空間に iptables のコンテナを入れる)
+services:
+  emulator:
+    ports: !reset []
+    environment:
+      EMULATOR_CAMERAS: ${EMULATOR_CAMERAS:-1}
+  edge:
+    image: cc-edgebuf:dev
+    environment:
+      CC_SINK: kvs
+      CC_USE_SHADOW: "true"
+      CC_STATUS_INTERVAL: ${CC_STATUS_INTERVAL:-10}
+      CC_DISCOVERY_ON_START: "false"
+      CC_KVS_LOG_CONFIG: /opt/kvs/outage_log_configuration
+    volumes:
+      - ./edge/scripts/outage/kvs_log_configuration:/opt/kvs/outage_log_configuration:ro
+    # 試験中にコンテナごと再起動されたら分かるように、自動再起動しない
+    restart: "no"
