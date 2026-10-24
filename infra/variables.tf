@@ -43,7 +43,7 @@ variable "kvs_retention_hours" {
 }
 
 variable "media_retention_days" {
-  description = "メディアバケット(動画、スプライト、プレイリスト)の保存日数。DynamoDB の expires_at もこれに合わせる"
+  description = "メディアバケット(動画、スプライト、プレイリスト)と検出結果バケットの保存日数。DynamoDB の expires_at もこれに合わせる"
   type        = number
   default     = 30
 }

@@ -47,7 +47,7 @@ scripts/destroy.sh cc-tmp-foo
 | ファイル | リソース |
 | --- | --- |
 | `kvs_iot.tf` | KVS ストリーム `{p}-{camera_id}`(保持 1 時間、`video/h265`)、IoT Thing `{p}-{gw}`、証明書(Terraform で発行・有効化)、ゲートウェイごとのポリシー(自分のクライアント ID、`{p}/{gw}/*`、自分のシャドウだけ)、KVS 用ロールとロールエイリアス `{p}-kvs-role-alias`(`{p}-*` のストリームへの PutMedia 等だけ) |
-| `s3.tf` | media / detections / athena / viewer / artifacts の 5 バケット。全部パブリックアクセスをブロック、SSE-S3。media は保存日数で削除、detections はバージョニングと旧バージョン 1 日削除、athena は 7 日削除。media と viewer は CloudFront(OAC)からの GetObject だけ許可 |
+| `s3.tf` | media / detections / athena / viewer / artifacts の 5 バケット。全部パブリックアクセスをブロック、SSE-S3。media は保存日数で削除、detections はバージョニングと旧バージョン 1 日削除、現行版は media と同じ保存日数で削除、athena は 7 日削除。media と viewer は CloudFront(OAC)からの GetObject だけ許可 |
 | `data.tf` | DynamoDB `{p}-state`(オンデマンド、TTL `expires_at`)、Glue `{p_underscored}.detections`(Parquet、`dt` のパーティションプロジェクション)、Athena ワークグループ `{p}` |
 | `lambda.tf` | `{p}-video-archiver` / `{p}-detector` / `{p}-api`(Python 3.13、arm64、`handler.lambda_handler`)。zip は artifacts バケット経由でデプロイ(50MB 超でも可、展開後 250MB まで)。関数ごとの IAM ロール、ロググループ |
 | `scheduler.tf` | スケジュールグループ `{p}`、カメラごとに `{p}-video-{cam}` / `{p}-detect-{cam}`(rate(1 minute)、入力 `{"camera_id": ...}`、再試行なし) |

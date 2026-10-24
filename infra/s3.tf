@@ -96,6 +96,16 @@ resource "aws_s3_bucket_lifecycle_configuration" "detections" {
     }
   }
 
+  # 検出結果も映像と同じ期間で消す(day ファイルの最終更新はその日の終わりなので、映像とほぼ同時に消える)
+  rule {
+    id     = "expire-detections"
+    status = "Enabled"
+    filter {}
+    expiration {
+      days = var.media_retention_days
+    }
+  }
+
   depends_on = [aws_s3_bucket_versioning.detections]
 }
 

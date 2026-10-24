@@ -39,7 +39,7 @@
 | バケット | 用途 | 備考 |
 | --- | --- | --- |
 | `{p}-media-{account_id}` | 動画、スプライト、プレイリスト | CloudFront(OAC)経由で配信 |
-| `{p}-detections-{account_id}` | 検出結果の Parquet | バージョニング有効、旧バージョンは 1 日後に削除 |
+| `{p}-detections-{account_id}` | 検出結果の Parquet | バージョニング有効、旧バージョンは 1 日後に削除。現行版は映像と同じ保存日数(`media_retention_days`、既定 30 日)で削除 |
 | `{p}-athena-{account_id}` | Athena のクエリ結果 | 7 日で削除 |
 | `{p}-viewer-{account_id}` | ビューワーの静的ファイル | CloudFront(OAC)経由で配信 |
 | `{p}-artifacts-{account_id}` | Lambda の zip(`lambda/<name>.zip`) | Terraform が S3 経由でデプロイするため(50MB 超に対応) |
