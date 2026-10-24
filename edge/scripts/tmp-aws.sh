@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# 検証用の一時 AWS リソース(名前は TMP_PROJECT。既定 cc-tmp-edge)を作る / 消す。
-# 並行して別の検証をするときは TMP_PROJECT を変える(例: TMP_PROJECT=cc-tmp-edgebuf)。
+# 検証用の一時 AWS リソース(名前は TMP_PROJECT、既定 cc-tmp-edge。cc-tmp- で始めること)を作る / 消す。
 # Terraform(infra/)を使わずにエッジ単体を実 AWS で試すためのもの。
 #
 #   edge/scripts/tmp-aws.sh up     # 作成して edge/.certs/gw-001/ に証明書と config.json を書く

@@ -494,8 +494,8 @@ class PtzManager:
 
     # --- 動きの追跡とシャドウ --------------------------------------------------
     def _track(self, st: CameraPtz, force_report: bool = False) -> None:
-        if force_report:
-            self._spawn(self._report(st, force=True))
+        # 命令の直後に 1 回送る(動いている間は 1 秒に 1 回までに抑える。止まっていれば必ず送る)
+        self._spawn(self._report(st, force=force_report or st.status.move_status != "MOVING"))
         if st.tracker and not st.tracker.done():
             return  # 動いている間の追跡は 1 本だけ(last_command_at の更新で延長される)
         st.tracker = self._spawn(self._track_loop(st))
