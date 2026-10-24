@@ -14,8 +14,9 @@ set -euo pipefail
 P="${TMP_PROJECT:-cc-tmp-edge}"
 GW="${TMP_GATEWAY:-gw-001}"
 CAMS="${TMP_CAMERAS:-cam-001}"
-# H.264 で送るカメラ(KVS ストリームの media type を video/h264 にする。ほかは video/h265。docs/codec.md)
-H264_CAMS=" ${TMP_H264_CAMERAS:-} "
+# kvssink が IoT から受け取る一時認証情報の有効期間(秒、900〜43200)。回線断の最中に取り直しが来ると
+# kvssink がエラーで止まりバッファが消えるので、長いほど起きにくい(edge/README.md の「回線断とバッファ」)
+CRED_S="${TMP_CREDENTIAL_S:-3600}"
 REGION="${AWS_REGION:-ap-northeast-1}"
 export AWS_PROFILE="${AWS_PROFILE:-cloud-camera}" AWS_REGION="$REGION" AWS_PAGER=""
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -31,7 +32,8 @@ ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 up() {
   mkdir -p "$ROOT/edge/.certs"
   echo "== IAM ロール $ROLE"
-  aws iam create-role --role-name "$ROLE" --assume-role-policy-document '{
+  aws iam create-role --role-name "$ROLE" --max-session-duration "$(( CRED_S > 3600 ? CRED_S : 3600 ))" \
+    --assume-role-policy-document '{
     "Version":"2012-10-17","Statement":[{"Effect":"Allow",
     "Principal":{"Service":"credentials.iot.amazonaws.com"},"Action":"sts:AssumeRole"}]}' >/dev/null
   aws iam put-role-policy --role-name "$ROLE" --policy-name kvs-put --policy-document "{
@@ -43,7 +45,7 @@ up() {
   echo "== ロールエイリアス $ALIAS(IAM の伝播待ちで数回再試行)"
   for i in 1 2 3 4 5 6; do
     if aws iot create-role-alias --role-alias "$ALIAS" --role-arn "$ROLE_ARN" \
-        --credential-duration-seconds 3600 >/dev/null 2>&1; then break; fi
+        --credential-duration-seconds "$CRED_S" >/dev/null 2>&1; then break; fi
     sleep 5
   done
   ALIAS_ARN="$(aws iot describe-role-alias --role-alias "$ALIAS" --query roleAliasDescription.roleAliasArn --output text)"
@@ -130,6 +132,13 @@ down() {
   rm -rf "$ROOT/edge/.certs/$GW"
   set -e
   check
+}
+
+# 作成済みのロールとロールエイリアスの認証情報の有効期間を変える(TMP_CREDENTIAL_S)
+creds() {
+  aws iam update-role --role-name "$ROLE" --max-session-duration "$(( CRED_S > 3600 ? CRED_S : 3600 ))"
+  aws iot update-role-alias --role-alias "$ALIAS" --credential-duration-seconds "$CRED_S" >/dev/null
+  aws iot describe-role-alias --role-alias "$ALIAS" --query roleAliasDescription.credentialDurationSeconds --output text
 }
 
 check() {

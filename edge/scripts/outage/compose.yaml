@@ -7,6 +7,8 @@
 # - エッジだけの通信を遮断する仕組みは outage-test.sh(エッジと同じネットワーク名前空間に iptables のコンテナを入れる)
 services:
   emulator:
+    # 他の検証と取り合わないよう、このワークツリーのソースでビルドした別名のイメージを使う
+    image: cc-edgebuf-emulator:dev
     ports: !reset []
     environment:
       EMULATOR_CAMERAS: ${EMULATOR_CAMERAS:-1}

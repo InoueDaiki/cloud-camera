@@ -93,7 +93,9 @@ run() {
     fi
     end=$(( ${now%.*} + minutes * 60 ))
     while (( $(date +%s) < end )); do
-      sleep 30
+      local left=$(( end - $(date +%s) ))
+      sleep $(( left < 30 ? left : 30 ))
+      (( left <= 30 )) && break  # 遮断の長さを正確に(状態の表示で遅れないように)
       echo "   $(date -u +%H:%M:%S) cpu=$(docker stats --no-stream --format '{{.CPUPerc}}' "$EDGE") $(last_status 40s)" | cut -c1-420
     done
     i=$(( i + 1 ))
