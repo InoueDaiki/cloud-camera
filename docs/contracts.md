@@ -171,6 +171,17 @@ timeline のレスポンス:
 }
 ```
 
+補足(実装で決めたこと。上の形に項目を足しただけで、既存の項目は変えていない):
+
+- 時刻の引数は ISO 8601(`Z` かオフセット付き)か epoch ミリ秒。範囲の上限は timeline 48 時間(省略時は直近 1 時間)、vod.m3u8 3 時間、kvs-hls の ON_DEMAND 24 時間
+- エラーはすべて `{"error": {"code": "...", "message": "..."}}`(例: `BAD_REQUEST`、`RANGE_TOO_LARGE`、`CAMERA_NOT_FOUND`、`NO_RECORDING`、`NO_FRAGMENTS`)
+- `GET /api/cameras` → `{"cameras": [{"camera_id", "gateway_id", "stream_name", "reported", "desired"(password は伏せる), "reported_at", "video_processed_until", "detect_processed_until"}]}`
+- `PUT .../streaming` → `{"camera_id", "streaming", "version"}`
+- timeline に `now` を追加
+- kvs-hls に `mode` を追加
+- search: `hits[]` に `ts_jst` を追加。`sql` は最後に実行した SQL(なければ null)。`queries`(実行した SQL ごとのスキャン量・エラー)を追加。
+  `usage` は `{"input_tokens", "output_tokens", "total_tokens", "model_id", "bedrock_calls", "tool_calls", "athena_bytes_scanned", "elapsed_ms", ...}`
+
 ## ONVIF エミュレーター
 
 - コンテナ 1 つで複数台を模擬できる(環境変数か設定ファイルでカメラ数を指定)
