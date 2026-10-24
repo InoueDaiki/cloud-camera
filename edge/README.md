@@ -101,6 +101,10 @@ docker compose exec edge python3 -m cc_edge.ptz http://emulator:8080/onvif/devic
 
 `result` と `shadow[...]` の行に、エッジが送るはずの内容がそのまま出る。
 
+実 AWS での確認(2026-10-24、`TMP_PROJECT=cc-tmp-ptz edge/scripts/tmp-aws.sh up` の Thing、エッジはローカル実行、カメラは契約どおりのスタブ):
+API(`POST .../ptz`、202 まで約 50 ms)→ IoT Core → エッジ → ONVIF → シャドウ → `GET .../ptz` で新しい位置が見えるまで中央値約 250 ms。
+映像への反映はこれに KVS の LIVE HLS の遅れ(数秒)が加わる。
+
 ## Raspberry Pi 4 への配置
 
 前提: 64 bit の Raspberry Pi OS(Bookworm 以降、arm64)と Docker Engine。
