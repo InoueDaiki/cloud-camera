@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KVS WebRTC 確認</title>
+  <style>
+    :root { --bg: #111418; --fg: #e8eaed; --muted: #9aa0a6; --accent: #8ab4f8; --bad: #f28b82; }
+    body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg);
+           font: 14px/1.5 system-ui, -apple-system, "Hiragino Sans", sans-serif; }
+    h1 { font-size: 16px; margin: 0 0 8px; }
+    .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .bar label { color: var(--muted); }
+    select, button { font: inherit; background: #202428; color: var(--fg); border: 1px solid #3c4043; border-radius: 6px; padding: 4px 10px; }
+    button { cursor: pointer; }
+    .stage { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+    video { width: 640px; max-width: 100%; background: #000; aspect-ratio: 16 / 9; }
+    /* 遅延の計測用: ブラウザの時計(UTC、ミリ秒)を映像のすぐ横に大きく出す。スクショで映像内の焼き込み時刻と比べる */
+    #clock { font: 600 28px/1.2 ui-monospace, Menlo, monospace; color: #fff; background: #000; padding: 6px 10px; }
+    #stats { font: 12px/1.6 ui-monospace, Menlo, monospace; white-space: pre; color: var(--muted); min-width: 320px; }
+    #log { font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--muted); max-height: 160px; overflow: auto; margin-top: 8px; }
+    .err { color: var(--bad); }
+  </style>
+</head>
+<body>
+  <h1>KVS WebRTC 確認ビューワー</h1>
+  <div class="bar">
+    <label>カメラ <select id="camera"><option>cam-001</option><option>cam-002</option></select></label>
+    <label>コーデック <select id="codec"><option value="any">ブラウザに任せる</option><option value="h264">H.264</option><option value="h265">H.265</option></select></label>
+    <label><input type="checkbox" id="relay"> TURN を強制(relay)</label>
+    <button id="start">接続</button>
+    <button id="stop">切断</button>
+    <span id="h265cap"></span>
+  </div>
+  <div class="stage">
+    <div>
+      <video id="video" autoplay playsinline muted></video>
+      <div id="clock">--</div>
+    </div>
+    <div id="stats"></div>
+  </div>
+  <div id="log"></div>
+  <!-- JS SDK は CDN から版を固定して読む(シグナリングの WebSocket と SDP / ICE のやりとりだけを使う) -->
+  <script src="https://cdn.jsdelivr.net/npm/amazon-kinesis-video-streams-webrtc@2.9.0/dist/kvs-webrtc.min.js"></script>
+  <script src="viewer.js"></script>
+</body>
+</html>
