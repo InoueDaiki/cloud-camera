@@ -58,6 +58,8 @@ def lambda_handler(event, context):
 - `MinuteResult(status, attributes)`。`status` は `DONE` / `EMPTY`、再試行しても無駄な失敗なら `FAILED`(即確定)
 - `attributes` は区間の件に `SET` する属性。float は Decimal に直す。`{kind}_status`、`{kind}_attempts`、`{kind}_duration_ms`、`expires_at`、キーは共通処理が書くので無視される
 - 例外を投げると失敗扱い。区間の件に `{kind}_error` を残し、カーソルはその手前で止まる(次の起動で再挑戦)
+- `common.NotReady` を投げると「まだ処理できない」扱い。試行回数に数えず(足した 1 を戻す)、カーソルはその手前で止まる。
+  断片が出そろっていないとき(下の `kvs.minute_ready`)に使う
 
 ### 区間の件に共通処理が書く属性
 
@@ -88,11 +90,27 @@ def lambda_handler(event, context):
 | `list_fragments(stream, start, end)` | ListFragments(プロデューサー時刻)をページ送りし、**開始時刻が `[start, end)`** の断片を時刻順に返す |
 | `effective_durations(fragments, gap_ms=500)` | 断片の実際の長さ。`FragmentLengthInMilliseconds` は最後の 1 フレーム分短い(実測)ので、次の断片の開始までを長さとする |
 | `build_segments(fragments, gap_ms=500)` | 断片の隙間が 500ms 以内ならつないだ録画範囲 `[[開始ms, 終了ms], ...]`(長さは `effective_durations`) |
-| `get_images(stream, start, end, interval_ms=, width=, height=)` | GetImages(プロデューサー時刻)をページ送りして時刻順に返す |
+| `get_images(stream, start, end, interval_ms=, width=, height=)` | GetImages(プロデューサー時刻)をページ送りして時刻順に返す。範囲の始まりの近くに断片がないと `ResourceNotFoundException` になる(実測) |
+| `minute_ready(stream, end, now, quiet_seconds=30, max_wait_seconds=600)` | 区間の断片が出そろったか。最近 quiet 秒に届いた断片に end 以降のものがある / 何も届いていない / max_wait を過ぎた、なら出そろったとみなす。`(bool, 理由)` |
+
+### 遅れて届く断片(minute_ready を使う理由)
+
+送信側(エッジ)が詰まると、断片は時刻順のまま遅れて届く。検証では送信コンテナの CPU 不足で、届くのが 30 秒 → 100 秒と遅れ続け、
+lag 30 秒のまま処理した区間は 60 本中 42 本しか入らなかった(残りは後から届いたが、カーソルが進んでいたので取りこぼした)。
+`process_minute` の最初で `kvs.minute_ready` を呼び、出そろっていなければ `NotReady` を投げると、送信が追いつくまで待てる。
+
+```python
+ready, why = kvs.minute_ready(stream, end, utcnow(), quiet_seconds=lag_seconds)
+if not ready:
+    raise NotReady(why)
+```
+
+送信が止まっている(回線断など)場合は「何も届いていない」で出そろったとみなすので、回線断のあとにエッジのバッファから遅れて届いた断片は取りこぼす。
 
 ## ログ
 
-`common.log(event, **fields)` で 1 行 1 JSON を標準出力に出す。共通処理は `minute_done` / `minute_retry` / `minute_failed` / `pipeline_done` / `lease_busy` などを出す。
+`common.log(event, **fields)` で 1 行 1 JSON を標準出力に出す。共通処理は `minute_done` / `minute_retry` / `minute_not_ready` / `minute_failed` / `pipeline_done` / `lease_busy` などを出す。
+`pipeline_done` の `stopped` は `caught_up` / `max_minutes` / `time` / `retry` / `not_ready` / `lease_lost`。
 
 ## テスト
 

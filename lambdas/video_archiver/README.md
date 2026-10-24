@@ -17,10 +17,11 @@ KVS の映像を 1 分区間ごとに S3 へ退避する Lambda。EventBridge Sc
 | `STATE_TABLE` | DynamoDB `{p}-state` | 必須 |
 | `MEDIA_BUCKET` | `{p}-media-{account_id}` | 必須 |
 | `STREAM_NAME_PREFIX` | KVS ストリーム名の接頭辞(`{p}-`) | 空 |
-| `LAG_SECONDS` | 遅れて届く断片を待つ秒数 | 30 |
+| `LAG_SECONDS` | 遅れて届く断片を待つ秒数。断片が出そろったかの判定(`minute_ready` の quiet)にも使う | 30 |
 | `MAX_MINUTES` | 1 回で処理する区間数の上限 | 5 |
 | `MAX_ATTEMPTS` | 1 区間の試行回数の上限 | 3 |
 | `MEDIA_RETENTION_DAYS` | `expires_at` の日数(S3 のライフサイクルと揃える) | 30 |
+| `MAX_WAIT_SECONDS` | (任意)送信が遅れているとき、区間の終わりから最大何秒待つか | 600 |
 
 推奨設定: メモリ 256〜512 MB、タイムアウト 60 秒(下の実測を参照)。
 
@@ -32,11 +33,20 @@ KVS の映像を 1 分区間ごとに S3 へ退避する Lambda。EventBridge Sc
 
 ## 1 区間の処理
 
+0. **断片が出そろったか**を `common.kvs.minute_ready` で確かめる(ListFragments をサーバー時刻で 1 回)。
+   送信が遅れていて区間の終わりまでの断片がまだ届いていなければ `NotReady` を投げ、次の起動に回す(失敗に数えない)
 1. **ListFragments**(プロデューサー時刻)で断片を取る。断片がなければ `EMPTY`(`segments: []`、`fragment_count: 0`、`bytes: 0`)。S3 には何も書かない
 2. **clip.mp4**: HLS ON_DEMAND(fMP4)セッションを開き、init と、1. で選んだ断片をそのまま連結する
 3. **sprite.jpg**: GetImages(1 秒間隔、160×90、JPEG)→ Pillow で 10×6 のシート
 4. **index.m3u8**: clip.mp4 を `EXT-X-BYTERANGE` で参照するプレイリスト
 5. S3 に clip → sprite → プレイリストの順で PUT。その後 `run_pipeline` が区間の件 → カーソルの順に書く
+
+### 遅れて届く断片
+
+検証中、送信コンテナが CPU 不足で詰まり、断片が届くまでの遅れが 30 秒 → 100 秒と伸び続けた。
+lag 30 秒で処理した区間(03:23)は 60 本中 42 本しか入らず、残りの 18 本は後から KVS に届いたがカーソルが進んでいたので S3 に入らなかった。
+これを防ぐため、処理の前に「最近届いた断片のプロデューサー時刻が区間の終わりを越えたか」を確かめる(`minute_ready`)。
+送信が止まっている(最近 `LAG_SECONDS` 秒に何も届いていない)ときは待たない。`MAX_WAIT_SECONDS` を過ぎたら届いている分で処理する。
 
 ### 区間をまたぐ断片の扱い
 

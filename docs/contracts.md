@@ -102,6 +102,7 @@ def run_pipeline(kind: Literal["VIDEO", "DETECT"], camera_id: str,
 `process_minute(camera_id, start, end)` は 1 分区間を処理し、`MinuteResult(status, attributes)` を返す(`attributes` は区間の件に UpdateItem する属性)。
 `status` は `DONE` / `EMPTY`、再試行しても無駄なら `FAILED`。`context` には Lambda のコンテキストを渡す(残り時間での打ち切りとリースに使う)。
 例外を投げたら失敗扱いで、構想.md の「1回の起動での流れ」どおりに再試行・`FAILED` 確定する。
+`common.NotReady` を投げたら「まだ処理できない」扱い(試行回数に数えず、カーソルはその手前で止まる)。断片が出そろったかは `common.kvs.minute_ready` で判定できる。
 `{kind}_attempts` は処理の前に 1 足す(タイムアウトで落ちても数える)。失敗の理由は `{kind}_error`(S、`video_error` / `detect_error`)に残し、成功したら消す。
 詳細は [lambdas/common/README.md](../lambdas/common/README.md)。
 Scheduler からの入力は `{"camera_id": "cam-001"}`。カメラごとに 1 本のスケジュールを作る。
