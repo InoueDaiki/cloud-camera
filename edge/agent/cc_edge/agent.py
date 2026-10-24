@@ -267,11 +267,20 @@ class Agent:
             payload = self.status_payload()
             if self.iot:
                 await self.iot.publish(self.iot.t_status, payload, qos=0)
+                # ビューワーのオンライン表示用。異常終了は API 側で now - last_seen > 90 秒をオフラインとみなす
+                await self.publish_presence(True, payload["ts"])
             log.info("status: %s", json.dumps(payload, ensure_ascii=False))
             try:
                 await asyncio.wait_for(self._stop.wait(), self.cfg.status_interval_s)
             except TimeoutError:
                 pass
+
+    async def publish_presence(self, online: bool, ts: str | None = None) -> None:
+        """シャドウの reported.online / reported.last_seen を更新する。"""
+        if not (self.iot and self.cfg.use_shadow and self.iot.connected.is_set()):
+            return
+        await self.iot.publish(f"{self.shadow_prefix}/update",
+                               {"state": {"reported": {"online": online, "last_seen": ts or utc_now()}}})
 
     # --- cmd / discovery ------------------------------------------------
     def _discovery_hosts(self) -> list[str]:
@@ -335,6 +344,7 @@ class Agent:
     async def _on_connected(self) -> None:
         await self.iot.publish(self.iot.t_status, self.status_payload())
         if self.cfg.use_shadow:
+            await self.publish_presence(True)
             await self.request_shadow()
 
     async def run(self) -> None:
@@ -367,10 +377,16 @@ class Agent:
             tasks.append(asyncio.create_task(self._discovery_after_start()))
         await self._stop.wait()
         log.info("停止中…")
-        for w in list(self.workers.values()):
-            await w.stop()
         for t in tasks:
             t.cancel()
+        await asyncio.gather(*(w.stop() for w in self.workers.values()), return_exceptions=True)
+        self._last_reported = None
+        if self.iot:
+            # 止めたカメラの状態と online=false を送ってから切断する(切断時に LWT も送られる)
+            state = self.reported_state()
+            if self.cfg.use_shadow and self.iot.connected.is_set():
+                await self.iot.publish(f"{self.shadow_prefix}/update", {"state": {"reported": state}})
+            await self.publish_presence(False)
         if self.iot:
             self.iot.stop()
             await asyncio.sleep(0.5)

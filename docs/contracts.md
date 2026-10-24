@@ -136,14 +136,26 @@ Scheduler からの入力は `{"camera_id": "cam-001"}`。カメラごとに 1 �
 ```
 
 `reported` はエッジが実際の状態(`streaming`、`rtsp_url`、`codec`、`resolution`、`error`)を返す。`profile_token` が null なら H.265 のプロファイルを自動選択する。
+desired に `rtsp_url`(と `codec`)を書くと ONVIF を使わずにその URL を直接使う(検証用)。
+シャドウは null を書くとキーを消すので、`error` などが null のときはキーがない(読む側は「ない = null」として扱う)。
+
+`reported` の最上位には次も入れる(ビューワーのオンライン表示用):
+
+| キー | 内容 |
+| --- | --- |
+| `online` | bool。接続時と status 送信(30 秒ごと)で `true`、正常終了時に `false` |
+| `last_seen` | ISO 8601 UTC。30 秒ごとに更新。異常終了は API 側で `now - last_seen > 90 秒` ならオフライン扱い |
+| `gateway` | `{"gateway_id", "sink"}`(`sink` は `kvs` / `fake` / `file`) |
+
+MQTT のクライアント ID は Thing 名。LWT のトピックがポリシーで許可されていないと、IoT Core は CONNECT 自体を拒否する。
 
 - トピック(`{gw}` はゲートウェイ ID):
 
 | トピック | 向き | 内容 |
 | --- | --- | --- |
-| `{p}/{gw}/status` | エッジ → クラウド | 30 秒ごとの死活。`{"ts", "cameras": {"cam-001": {"streaming", "uptime_s", "bytes_sent"}}}`。LWT で `{"online": false}` |
-| `{p}/{gw}/discovery` | エッジ → クラウド | WS-Discovery の結果 |
-| `{p}/{gw}/cmd` | クラウド → エッジ | `{"action": "discover"}` などの単発コマンド |
+| `{p}/{gw}/status` | エッジ → クラウド | 30 秒ごとの死活。`{"ts", "online": true, "gateway_id", "cameras": {"cam-001": {"streaming", "uptime_s", "bytes_sent", "restarts", "gop_s", "persist_latency_ms", "error"}}}`。LWT(異常切断と正常終了の両方)で `{"online": false, "gateway_id"}` |
+| `{p}/{gw}/discovery` | エッジ → クラウド | WS-Discovery の結果 `{"ts", "gateway_id", "request_id"?, "devices": [{"urn", "types", "scopes", "xaddrs", "from"}]}`。`probe` の結果は `{"probe": {"onvif_url", "selected" or "error"}}` |
+| `{p}/{gw}/cmd` | クラウド → エッジ | 単発コマンド。`{"action": "discover"}`、`{"action": "probe", "onvif_url", "username", "password"}`、`{"action": "restart", "camera_id"?}`、`{"action": "status"}`、`{"action": "reload"}`(シャドウを取り直す)。`request_id` を付けると応答に入る |
 
 ## HTTP API(API Gateway HTTP API、パス接頭辞 `/api`)
 
@@ -204,4 +216,8 @@ timeline のレスポンス:
 
 - `docker compose`(リポジトリ直下の `compose.yaml`)でエミュレーターとエッジを一緒に起動して検証できる
 - 証明書は `edge/.certs/`(gitignore 済み)をマウント。`scripts/` に Terraform の出力から証明書と設定を書き出すスクリプトを置く
-- 再エンコードしない: `rtspsrc ! rtph265depay ! h265parse ! kvssink`
+- 再エンコードしない: `rtspsrc ! rtph265depay ! h265parse ! video/x-h265,stream-format=hvc1,alignment=au ! h265timestamper ! kvssink`
+  - kvssink は NAL 変換をしないため、コーデックプライベートデータは caps の `codec_data` で渡す(`stream-format=hvc1` が必須)
+  - RTP から取り出したフレームには DTS がなく、kvssink は「VPS/SPS/PPS を含み DTS が無効」なキーフレームを捨てる。`h265timestamper` で DTS を付ける
+- フラグメントはキーフレームごと(エミュレーターのキーフレーム間隔 1 秒 → 1 秒ごと)。ProducerTimestamp はゲートウェイの壁時計(NTP 前提)で、最初のフレームを受け取った時刻 + PTS の差分
+- `FragmentLengthInMilliseconds` は「最後のフレームの開始 − 最初のフレームの開始」で、1 フレーム分(15fps なら 67ms)短い。`segments` をつなぐ許容値(500ms)には収まる

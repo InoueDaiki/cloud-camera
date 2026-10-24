@@ -1,39 +1,41 @@
-# エミュレーター(配信元)とエッジゲートウェイを一緒に起動する。
+# ONVIF エミュレーターとエッジゲートウェイを一緒に起動する。
 #
-#   ドライラン(AWS なし):  docker compose up --build
-#   実 AWS:                 CC_SINK=kvs CC_GATEWAY_ID=gw-001 docker compose up --build
-#                           (edge/.certs/gw-001/ に scripts/provision-edge.sh で証明書と config.json を置く)
+#   ドライラン(AWS なし、ローカル設定):  docker compose up --build
+#   MKV に保存するドライラン:              CC_SINK=file docker compose up --build   (edge/.out/ に出力)
+#   実 AWS(シャドウで配信を制御):        CC_SINK=kvs CC_USE_SHADOW=true docker compose up --build
+#     → 事前に scripts/provision-edge.sh で edge/.certs/<gateway_id>/ に証明書と config.json を置く
 #
-# TODO: emulator/compose.yaml が main に入ったら include: に差し替え、仮の配信元 fakecam を消す。
+# エミュレーターの設定は emulator/compose.yaml と emulator/README.md(既定 2 台、admin / admin)。
 name: cloud-camera
 
-services:
-  # 仮の配信元: MediaMTX + FFmpeg で H.265 のテストパターンを RTSP 配信する(ONVIF はなし)
-  fakecam:
-    image: bluenviron/mediamtx:1.21.1-ffmpeg
-    volumes:
-      - ./edge/dev/mediamtx.yml:/mediamtx.yml:ro
-    ports:
-      - "8554:8554"
+include:
+  - emulator/compose.yaml
 
+services:
   edge:
     build:
       context: ./edge
     image: cc-edge:dev
-    depends_on: [fakecam]
+    depends_on:
+      emulator:
+        condition: service_healthy
     environment:
       CC_PROJECT: ${CC_PROJECT:-cloud-camera}
       CC_GATEWAY_ID: ${CC_GATEWAY_ID:-gw-001}
       # fake / file はドライラン(KVS に送らない)。kvs で実際に送る
       CC_SINK: ${CC_SINK:-fake}
-      # シャドウを使わずに compose 内の設定だけで動かす場合は false
+      # false ならシャドウを使わず、下の CC_CAMERAS(ローカル設定)だけで動く
       CC_USE_SHADOW: ${CC_USE_SHADOW:-false}
       CC_CONFIG_FILE: /certs/config.json
       CC_OUTPUT_DIR: /out
       CC_LOG_LEVEL: ${CC_LOG_LEVEL:-INFO}
-      # ローカル設定のカメラ(CC_USE_SHADOW=false のとき使う。シャドウの desired.cameras と同じ形 + rtsp_url)
-      CC_CAMERAS: ${CC_CAMERAS:-{"cam-001":{"rtsp_url":"rtsp://fakecam:8554/cam1/main","codec":"H265","streaming":true}}}
+      # ローカル設定のカメラ(シャドウの desired.cameras と同じ形)
+      CC_CAMERAS: >-
+        ${CC_CAMERAS:-{"cam-001": {"onvif_url": "http://emulator:8080/onvif/device_service", "username": "admin", "password": "admin", "profile_token": null, "streaming": true},
+        "cam-002": {"onvif_url": "http://emulator:8081/onvif/device_service", "username": "admin", "password": "admin", "profile_token": null, "streaming": true}}}
     volumes:
       - ./edge/.certs/${CC_GATEWAY_ID:-gw-001}:/certs:ro
       - ./edge/.out:/out
+    # 停止時に kvssink のバッファを吐き出し、LWT を送るための猶予
+    stop_grace_period: 30s
     restart: unless-stopped
