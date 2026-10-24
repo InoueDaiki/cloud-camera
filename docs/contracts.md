@@ -243,6 +243,9 @@ timeline のレスポンス:
 - kvs-hls に `mode` を追加
 - search: `hits[]` に `ts_jst` を追加。`sql` は最後に実行した SQL(なければ null)。`queries`(実行した SQL ごとのスキャン量・エラー)を追加。
   `usage` は `{"input_tokens", "output_tokens", "total_tokens", "model_id", "bedrock_calls", "tool_calls", "athena_bytes_scanned", "elapsed_ms", ...}`
+- search(検索の改善で追加。既存の項目は変えていない): `queries[]` に `tool`(`search_detections` / `query_detections`)、
+  `input`(search_detections の引数)、`warnings`(SQL ガードの警告)を追加。`usage` に `lint_retries`(回答の書き直し回数)を追加。
+  `hits[].ts` は search_detections の場合、イベントの最初のフレームの時刻
 
 ## ONVIF エミュレーター
 

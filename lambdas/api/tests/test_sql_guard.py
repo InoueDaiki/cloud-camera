@@ -83,3 +83,43 @@ def test_union_limit_applies_to_whole():
     r = g("SELECT ts FROM detections WHERE dt='2026-10-24' UNION ALL "
           "SELECT ts FROM detections WHERE dt='2026-10-23'")
     assert r.sql.endswith(f"LIMIT {MAX_ROWS}")
+
+
+# ---- ts と dt の整合(評価で見つかった「dt だけで日本時間の日を絞ったつもり」「dt が 1 日足りない」への対策)
+
+def test_ts_without_dt_coverage_is_rejected():
+    # 日本時間 10/22 0 時〜 = UTC 10/21 15 時〜。dt に 10/21 がない
+    with pytest.raises(SqlRejected) as e:
+        g("SELECT * FROM detections WHERE dt = '2026-10-22' "
+          "AND ts >= TIMESTAMP '2026-10-22 00:00:00 Asia/Tokyo' AND ts < TIMESTAMP '2026-10-22 12:00:00 Asia/Tokyo'")
+    assert "dt BETWEEN '2026-10-21' AND '2026-10-22'" in str(e.value)
+
+
+@pytest.mark.parametrize("cond", [
+    "ts >= TIMESTAMP '2026-10-22 00:00:00 Asia/Tokyo' AND ts < TIMESTAMP '2026-10-22 12:00:00 Asia/Tokyo'",
+    "ts BETWEEN TIMESTAMP '2026-10-21 15:00:00' AND TIMESTAMP '2026-10-22 02:59:59'",
+    "ts >= from_iso8601_timestamp('2026-10-22T00:00:00+09:00') AND ts < TIMESTAMP '2026-10-22 03:00:00 UTC'",
+])
+def test_ts_with_dt_coverage_ok(cond):
+    r = g(f"SELECT * FROM detections WHERE dt BETWEEN '2026-10-21' AND '2026-10-22' AND {cond}")
+    assert r.warnings == []
+
+
+def test_ts_24_oclock_is_rejected():
+    with pytest.raises(SqlRejected) as e:
+        g("SELECT * FROM detections WHERE dt BETWEEN '2026-10-21' AND '2026-10-22' "
+          "AND ts < TIMESTAMP '2026-10-21 24:00:00 Asia/Tokyo'")
+    assert "00:00:00" in str(e.value)
+
+
+def test_missing_ts_is_warned_not_rejected():
+    r = g(OK)
+    assert len(r.warnings) == 1 and "ts の条件がありません" in r.warnings[0]
+    # 検査を切れば警告しない(段階ごとの比較用)
+    assert guard(OK, table="detections", database="test_db", check_ts=False).warnings == []
+
+
+def test_ts_check_inside_cte():
+    with pytest.raises(SqlRejected):
+        g("WITH f AS (SELECT * FROM detections WHERE dt = '2026-10-22' "
+          "AND ts >= TIMESTAMP '2026-10-22 08:00:00 Asia/Tokyo') SELECT count(*) FROM f")

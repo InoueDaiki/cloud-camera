@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import aws
 from .config import Config
@@ -11,6 +13,31 @@ from .config import Config
 
 class AthenaError(RuntimeError):
     pass
+
+
+def parse_timestamp(value: str) -> datetime | None:
+    """Athena の timestamp 文字列を読む。
+
+    '2026-10-24 01:23:45.123' は UTC、'2026-10-24 10:00:00.000 Asia/Tokyo'(timestamp with time zone)はその地域の時刻。
+    """
+    v = value.strip()
+    zone = None
+    parts = v.split(" ")
+    if len(parts) == 3:
+        v, zone = f"{parts[0]} {parts[1]}", parts[2]
+    try:
+        dt = datetime.fromisoformat(v)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        if zone and zone != "UTC":
+            try:
+                dt = dt.replace(tzinfo=ZoneInfo(zone))
+            except (ZoneInfoNotFoundError, ValueError):
+                return None
+        else:
+            dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 @dataclass

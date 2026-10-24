@@ -12,8 +12,9 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import sqlglot
 from sqlglot import exp
@@ -36,6 +37,84 @@ class GuardResult:
     limit: int
     dt_from: str
     dt_to: str
+    # 実行はするが、モデルに知らせて直させたいこと(ts の条件がない等)
+    warnings: list[str] = field(default_factory=list)
+
+
+_TS_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2})(\.\d+)?)?\s*(Z|[+-]\d{2}:?\d{2}|[A-Za-z_]+/[A-Za-z_]+|UTC)?$")
+
+
+def _ts_value(e: exp.Expression) -> datetime | None:
+    """ts と比べているリテラルを UTC の datetime にする。読めない形なら None(検査しない)。"""
+    if isinstance(e, exp.Cast) and isinstance(e.this, exp.Literal) and e.this.is_string:
+        text = e.this.this
+    elif isinstance(e, exp.FromISO8601Timestamp) and isinstance(e.this, exp.Literal):
+        text = e.this.this
+    elif isinstance(e, exp.Literal) and e.is_string:
+        text = e.this
+    else:
+        return None
+    m = _TS_RE.match(text.strip())
+    if not m:
+        return None
+    day, hh, mm, ss, frac, zone = m.groups()
+    if int(hh) >= 24:
+        raise SqlRejected(f"時刻 {text!r} は不正です。24 時は翌日の '00:00:00' と書いてください")
+    try:
+        dt = datetime.fromisoformat(f"{day} {int(hh):02d}:{mm}:{ss or '00'}{frac or ''}")
+    except ValueError as e:
+        raise SqlRejected(f"時刻 {text!r} は不正です") from e
+    if not zone or zone in ("Z", "UTC"):
+        return dt.replace(tzinfo=timezone.utc)
+    if zone[0] in "+-":
+        z = zone.replace(":", "")
+        off = timedelta(hours=int(z[1:3]), minutes=int(z[3:5]))
+        return dt.replace(tzinfo=timezone(off if z[0] == "+" else -off)).astimezone(timezone.utc)
+    try:
+        return dt.replace(tzinfo=ZoneInfo(zone)).astimezone(timezone.utc)
+    except (ZoneInfoNotFoundError, ValueError):
+        return None
+
+
+def _is_ts(e: exp.Expression) -> bool:
+    return isinstance(e, exp.Column) and e.name.lower() == "ts"
+
+
+def _ts_bounds(where: exp.Where | None) -> tuple[datetime | None, datetime | None, bool]:
+    """WHERE の AND 条件から ts の [下限, 上限) を求める(UTC)。3 つ目は ts の条件があったか。"""
+    lo: datetime | None = None
+    hi: datetime | None = None
+    seen = False
+    if where is None:
+        return lo, hi, seen
+    for c in _conjuncts(where.this):
+        if isinstance(c, exp.Between) and _is_ts(c.this):
+            seen = True
+            a, b = _ts_value(c.args["low"]), _ts_value(c.args["high"])
+            if a:
+                lo = a if lo is None else max(lo, a)
+            if b:
+                b = b + timedelta(milliseconds=1)
+                hi = b if hi is None else min(hi, b)
+        elif isinstance(c, (exp.GTE, exp.GT, exp.LTE, exp.LT)):
+            if _is_ts(c.left):
+                v, op = c.right, type(c)
+            elif _is_ts(c.right):
+                flip = {exp.GTE: exp.LTE, exp.GT: exp.LT, exp.LTE: exp.GTE, exp.LT: exp.GT}
+                v, op = c.left, flip[type(c)]
+            else:
+                continue
+            seen = True
+            t = _ts_value(v)
+            if t is None:
+                continue
+            if op in (exp.GTE, exp.GT):
+                lo = t if lo is None else max(lo, t)
+            else:
+                t = t + timedelta(milliseconds=1) if op is exp.LTE else t
+                hi = t if hi is None else min(hi, t)
+    return lo, hi, seen
 
 
 def _date(lit: exp.Expression) -> date:
@@ -129,7 +208,31 @@ def _parse_one(sql: str) -> exp.Expression:
     return stmts[0]
 
 
-def _check(root: exp.Expression, table: str, database: str) -> tuple[date, date]:
+def _check_ts(sel: exp.Select, lo: date, hi: date, warnings: list[str]) -> None:
+    """ts の条件と dt の条件の整合を見る。dt が ts の範囲を覆っていなければ拒否、ts の条件がなければ警告。"""
+    ts_lo, ts_hi, seen = _ts_bounds(sel.args.get("where"))
+    if not seen:
+        warnings.append(
+            f"ts の条件がありません。dt は UTC の日付なので、この検索は日本時間の {lo:%m/%d} 9:00 〜 "
+            f"{hi + timedelta(days=1):%m/%d} 9:00 を対象にしています。「今日」「昨日」や時間帯の質問なら、"
+            "ts の範囲(TIMESTAMP '... Asia/Tokyo')を足して検索し直してください。")
+        return
+    need_lo = ts_lo.date() if ts_lo else None
+    need_hi = (ts_hi - timedelta(milliseconds=1)).date() if ts_hi else None
+    if need_lo and need_hi and need_hi < need_lo:
+        return  # 空の範囲。実行しても 0 行
+    if (need_lo and need_lo < lo) or (need_hi and need_hi > hi):
+        want_lo = min(lo, need_lo) if need_lo else lo
+        want_hi = max(hi, need_hi) if need_hi else hi
+        raise SqlRejected(
+            f"ts の範囲(UTC で {ts_lo:%Y-%m-%d %H:%M} 〜 {ts_hi:%Y-%m-%d %H:%M})に対して dt の範囲 "
+            f"'{lo}'〜'{hi}' が足りません。dt BETWEEN '{want_lo}' AND '{want_hi}' にしてください"
+            if ts_lo and ts_hi else
+            f"ts の範囲に対して dt の範囲 '{lo}'〜'{hi}' が足りません。dt BETWEEN '{want_lo}' AND '{want_hi}' にしてください")
+
+
+def _check(root: exp.Expression, table: str, database: str,
+           warnings: list[str] | None = None) -> tuple[date, date]:
     if not isinstance(root, (exp.Select, exp.SetOperation)):
         raise SqlRejected("SELECT 文だけ実行できます")
     forbidden = (exp.Insert, exp.Update, exp.Delete, exp.Create, exp.Drop, exp.Alter,
@@ -179,6 +282,8 @@ def _check(root: exp.Expression, table: str, database: str) -> tuple[date, date]
             raise SqlRejected("dt の範囲が空です")
         if (hi - lo).days + 1 > MAX_DT_DAYS:
             raise SqlRejected(f"dt の範囲は {MAX_DT_DAYS} 日以内にしてください")
+        if warnings is not None:
+            _check_ts(sel, lo, hi, warnings)
         overall_lo = lo if overall_lo is None else min(overall_lo, lo)
         overall_hi = hi if overall_hi is None else max(overall_hi, hi)
     if not found:
@@ -186,8 +291,11 @@ def _check(root: exp.Expression, table: str, database: str) -> tuple[date, date]
     return overall_lo, overall_hi  # type: ignore[return-value]
 
 
-def guard(sql: str, *, table: str = "detections", database: str = "", max_rows: int = MAX_ROWS) -> GuardResult:
+def guard(sql: str, *, table: str = "detections", database: str = "", max_rows: int = MAX_ROWS,
+          check_ts: bool = True) -> GuardResult:
     """検査して、実行してよい SQL(LIMIT を強制したもの)を返す。だめなら SqlRejected。
+
+    check_ts: ts の条件と dt の条件の整合を見る(dt が足りなければ拒否、ts の条件がなければ warnings)。
 
     sqlglot で作り直した SQL ではなく、元の文字列に LIMIT だけ足して実行する
     (方言の変換で関数や型が変わるのを避けるため)。足した後にもう一度全部検査する。
@@ -201,7 +309,8 @@ def guard(sql: str, *, table: str = "detections", database: str = "", max_rows: 
         raise SqlRejected(f"SQL が長すぎます({MAX_SQL_LENGTH} 文字まで)")
 
     root = _parse_one(text)
-    _check(root, table, database)
+    warnings: list[str] = []
+    _check(root, table, database, warnings if check_ts else None)
     limit = _outer_limit(root)
     if limit is None:
         text = f"{text}\nLIMIT {max_rows}"
@@ -219,4 +328,5 @@ def guard(sql: str, *, table: str = "detections", database: str = "", max_rows: 
     limit = _outer_limit(root)
     if limit is None or limit > max_rows:
         raise SqlRejected(f"いちばん外側の LIMIT は {max_rows} 以下にしてください")
-    return GuardResult(sql=text, limit=limit, dt_from=lo.isoformat(), dt_to=hi.isoformat())
+    return GuardResult(sql=text, limit=limit, dt_from=lo.isoformat(), dt_to=hi.isoformat(),
+                       warnings=list(dict.fromkeys(warnings)))

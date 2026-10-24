@@ -11,7 +11,7 @@ import json
 import os
 from dataclasses import dataclass, field
 
-# 費用と品質のバランスで選んだ既定値(README の「モデルの選び方」を参照)。
+# 費用と品質のバランスで選んだ既定値(README の「検索の評価」のモデル比較を参照)。
 # Anthropic のモデルはアカウントでユースケースの申請が済んだら
 # BEDROCK_MODEL_ID=jp.anthropic.claude-haiku-4-5-20251001-v1:0 に切り替える候補。
 DEFAULT_MODEL_ID = "jp.amazon.nova-2-lite-v1:0"
@@ -32,6 +32,8 @@ class Config:
     cameras: dict[str, str] = field(default_factory=dict)
     # 以下は合意外の任意設定(未設定なら既定値)
     media_url_prefix: str = "/media/"
+    # カメラ ID → 表示名(検索のプロンプト用)。未設定ならシャドウの name を使う
+    camera_names: dict[str, str] = field(default_factory=dict)
 
     def stream_name(self, camera_id: str) -> str:
         return f"{self.stream_name_prefix}{camera_id}"
@@ -54,6 +56,12 @@ def load() -> Config:
         cameras = {}
     if isinstance(cameras, list):  # ["cam-001", ...] だけ渡された場合も受け付ける
         cameras = {c: "" for c in cameras}
+    try:
+        names = json.loads(env.get("CAMERA_NAMES", "{}") or "{}")
+    except json.JSONDecodeError:
+        names = {}
+    if not isinstance(names, dict):
+        names = {}
     return Config(
         project=project,
         state_table=env.get("STATE_TABLE", f"{project}-state"),
@@ -67,4 +75,5 @@ def load() -> Config:
         iot_thing_prefix=env.get("IOT_THING_PREFIX", f"{project}-"),
         cameras={str(k): str(v) for k, v in cameras.items()},
         media_url_prefix=env.get("MEDIA_URL_PREFIX", "/media/"),
+        camera_names={str(k): str(v) for k, v in names.items() if v},
     )
