@@ -179,7 +179,22 @@ class PtzClient:
             return False
         profiles = self._ptz_profiles(services)
         if not profiles:
-            return False
+            # PTZ サービスはあるのに、プロファイルに PTZConfiguration が見えないカメラもある。
+            # 配信と同じプロファイルで GetStatus が通れば対応とみなす
+            try:
+                _, all_profiles = cli.get_profiles()
+                prof = onvif.select_profile(all_profiles, self.want_profile)
+            except OnvifError:
+                return False
+            self.xaddr, self.profile_token, self.config_token = xaddr, prof.token, None
+            try:
+                self.get_status()
+            except OnvifError as e:
+                log.info("PTZ サービスはあるが、プロファイル %s で GetStatus できない: %s", prof.token, e)
+                self.xaddr = self.profile_token = None
+                return False
+            log.info("プロファイルに PTZConfiguration がないが、%s で GetStatus できたので PTZ を使う", prof.token)
+            return True
         chosen = None
         if self.want_profile:
             chosen = next((p for p in profiles if p[0] == self.want_profile), None)

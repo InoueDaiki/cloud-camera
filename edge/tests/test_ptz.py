@@ -69,7 +69,7 @@ def _vec(el):
             float(z.get("x")) if z is not None else None)
 
 
-def make_handler(sim: Sim, with_ptz: bool):
+def make_handler(sim: Sim, with_ptz: bool, ptz_conf: bool = True):
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -94,7 +94,7 @@ def make_handler(sim: Sim, with_ptz: bool):
             if op == "GetCapabilities":
                 return self._send(200, _env("<tds:GetCapabilitiesResponse><tds:Capabilities/></tds:GetCapabilitiesResponse>"))
             if op == "GetProfiles":
-                p = PROFILES if with_ptz else PROFILES.replace('<tr2:PTZ token="PtzConf"><tt:Name>ptz</tt:Name><tt:NodeToken>PtzNode</tt:NodeToken></tr2:PTZ>', "")
+                p = PROFILES if with_ptz and ptz_conf else PROFILES.replace('<tr2:PTZ token="PtzConf"><tt:Name>ptz</tt:Name><tt:NodeToken>PtzNode</tt:NodeToken></tr2:PTZ>', "")
                 return self._send(200, _env(p))
             if not with_ptz or self.path != "/onvif/ptz_service":
                 return self._fault("unknown")
@@ -162,8 +162,8 @@ def make_handler(sim: Sim, with_ptz: bool):
     return H
 
 
-def _serve(sim, with_ptz):
-    srv = HTTPServer(("127.0.0.1", 0), make_handler(sim, with_ptz))
+def _serve(sim, with_ptz, ptz_conf=True):
+    srv = HTTPServer(("127.0.0.1", 0), make_handler(sim, with_ptz, ptz_conf))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv, f"http://127.0.0.1:{srv.server_address[1]}/onvif/device_service"
 
@@ -220,6 +220,18 @@ def test_client_explicit_profile(cam):
 def test_client_not_supported(cam_noptz):
     _, url = cam_noptz
     assert ptz.PtzClient(url, "admin", "admin").connect() is False
+
+
+def test_client_without_ptz_configuration():
+    """PTZ サービスはあるがプロファイルに PTZConfiguration がないカメラは、配信と同じプロファイルで試す。"""
+    sim = Sim()
+    srv, url = _serve(sim, True, ptz_conf=False)
+    try:
+        c = ptz.PtzClient(url, "admin", "admin")
+        assert c.connect() is True
+        assert c.profile_token == "Profile_Main" and c.config_token is None
+    finally:
+        srv.shutdown()
 
 
 def test_parse_status_variants():
