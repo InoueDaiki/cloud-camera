@@ -1,0 +1,149 @@
+.root {
+  position: relative;
+  user-select: none;
+  touch-action: none;
+}
+
+.track {
+  position: relative;
+  height: 28px;
+  border-radius: var(--mantine-radius-sm);
+  background: var(--cc-track);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.future {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--cc-track-future);
+}
+
+.bar {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  min-width: 1px;
+}
+
+.s3 {
+  background: var(--cc-rec-s3);
+}
+
+.kvs {
+  background: var(--cc-rec-kvs);
+}
+
+.failed {
+  top: 0;
+  bottom: 0;
+  background: var(--cc-rec-failed);
+}
+
+.playhead {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--cc-playhead);
+  border-radius: 1px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.playhead::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -4px;
+  border: 5px solid transparent;
+  border-top-color: var(--cc-playhead);
+}
+
+.hoverLine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--mantine-color-text);
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.ticks {
+  position: relative;
+  height: 18px;
+  margin-top: 2px;
+}
+
+.tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-size: var(--mantine-font-size-xs);
+  color: var(--mantine-color-dimmed);
+  white-space: nowrap;
+}
+
+.tick:first-child {
+  transform: none;
+}
+
+.tick:last-child {
+  transform: translateX(-100%);
+}
+
+.tickMark {
+  position: absolute;
+  bottom: 0;
+  width: 1px;
+  height: 6px;
+  background: var(--cc-border);
+  pointer-events: none;
+}
+
+.preview {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  z-index: 10;
+  padding: 4px;
+  border-radius: var(--mantine-radius-md);
+  background: var(--mantine-color-body);
+  border: 1px solid var(--cc-border);
+  box-shadow: var(--mantine-shadow-md);
+  pointer-events: none;
+}
+
+.thumb {
+  border-radius: var(--mantine-radius-sm);
+  background-color: var(--cc-video-bg);
+}
+
+.noThumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--mantine-radius-sm);
+  background: var(--cc-surface-muted);
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-xs);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: var(--mantine-font-size-xs);
+  color: var(--mantine-color-dimmed);
+}
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}

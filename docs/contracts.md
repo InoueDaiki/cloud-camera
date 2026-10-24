@@ -157,6 +157,22 @@ Scheduler からの入力は `{"camera_id": "cam-001"}`。カメラごとに 1 �
 | `GET /api/cameras/{id}/kvs-hls?mode=LIVE\|ON_DEMAND&from=&to=` | KVS の HLS セッション URL(`{"url", "expires_at"}`)。fMP4 を指定 |
 | `POST /api/search` | `{"question": "..."}` → `{"answer": "...", "hits": [{"camera_id", "ts", "label", "confidence"}], "sql": "...", "usage": {...}}` |
 
+cameras のレスポンス(ビューワーが使う項目。`name` 以降は省略可):
+
+```json
+{"cameras": [{
+  "camera_id": "cam-001", "name": "玄関", "gateway_id": "gw-001",
+  "online": true, "streaming": true, "desired_streaming": true,
+  "codec": "H.265", "resolution": "1920x1080", "error": null, "last_seen": "...",
+  "video_processed_until": "...", "detect_processed_until": "..."
+}]}
+```
+
+`online` はゲートウェイの死活、`streaming` はシャドウの reported、`desired_streaming` は desired。
+
+kvs-hls は `DisplayFragmentTimestamp=ALWAYS` で発行する(ビューワーが `EXT-X-PROGRAM-DATE-TIME` で絶対時刻に合わせるため)。配信していないなどでセッションを作れないときは 404。
+search の `usage` は `{"input_tokens", "output_tokens", "athena_scanned_bytes"}`(数値。ほかのキーがあってもそのまま表示する)。
+
 timeline のレスポンス:
 
 ```json

@@ -1,0 +1,89 @@
+.stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: calc(100dvh - var(--cc-header-height) - 230px);
+  min-height: 200px;
+  background: var(--cc-video-bg);
+  border-radius: var(--mantine-radius-md);
+  overflow: hidden;
+}
+
+@media (max-width: $mantine-breakpoint-sm) {
+  .stage {
+    max-height: none;
+    min-height: 0;
+    border-radius: 0;
+    margin-inline: calc(var(--mantine-spacing-md) * -1);
+    width: calc(100% + var(--mantine-spacing-md) * 2);
+  }
+}
+
+.video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.overlayTop {
+  position: absolute;
+  inset: 0 0 auto 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px 24px;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), transparent);
+  color: var(--cc-video-overlay-text);
+  pointer-events: none;
+}
+
+.camName {
+  font-weight: 600;
+  font-size: var(--mantine-font-size-md);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.clock {
+  font-size: var(--mantine-font-size-sm);
+  opacity: 0.9;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.sourceChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: var(--mantine-radius-sm);
+  background: var(--cc-video-overlay);
+  font-size: var(--mantine-font-size-xs);
+  white-space: nowrap;
+}
+
+.liveDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mantine-color-red-6);
+}
+
+.center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 16px;
+  text-align: center;
+  color: var(--cc-video-overlay-text);
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.centerText {
+  max-width: 420px;
+  font-size: var(--mantine-font-size-sm);
+}
