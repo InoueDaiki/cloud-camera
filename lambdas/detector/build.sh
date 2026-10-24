@@ -81,7 +81,7 @@ fi
 AFTER_DEPS=$(du -sk "$STAGE" | cut -f1)
 
 # 3. 本体、共通処理、モデル
-cp "$HERE"/handler.py "$HERE"/detect.py "$HERE"/parquet_store.py "$STAGE/"
+cp "$HERE"/handler.py "$HERE"/detect.py "$HERE"/parquet_store.py "$HERE"/frame_source.py "$STAGE/"
 rsync -a --exclude tests --exclude .venv --exclude '__pycache__' --exclude pyproject.toml \
   --exclude uv.lock --exclude README.md "$ROOT/lambdas/common/" "$STAGE/common/"
 mkdir -p "$STAGE/models"

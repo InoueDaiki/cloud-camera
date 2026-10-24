@@ -94,6 +94,25 @@ def test_process_minute_empty(env, monkeypatch):
     assert s3.list_objects_v2(Bucket=BUCKET).get("KeyCount", 0) == 0
 
 
+def test_frame_source_can_be_swapped(env, monkeypatch):
+    """FRAME_SOURCE を差し替えれば GetImages を使わずに推論できる(PIL / numpy の画像も受け付ける)。"""
+    import numpy as np
+    from PIL import Image
+
+    import frame_source
+
+    handler, s3 = env
+    start = datetime(2026, 10, 24, 10, 20, tzinfo=UTC)
+    monkeypatch.setattr(kvs, "minute_ready", lambda *a, **k: (True, "quiet"))
+    img = Image.open(os.path.join(FIXTURES, "person.jpg")).convert("RGB")
+    frames = [(start, img), (start + timedelta(seconds=1), np.asarray(img))]
+    monkeypatch.setattr(handler, "FRAME_SOURCE",
+                        lambda c, s, e: frame_source.FrameBatch(frames, {"source": "test"}))
+    res = handler.process_minute("cam-001", start, start + timedelta(minutes=1))
+    assert res.status == "DONE" and res.attributes["frame_count"] == 2
+    assert res.attributes["detect_count"] > 0
+
+
 def test_not_ready_raises(env, monkeypatch):
     handler, s3 = env
     from common import NotReady

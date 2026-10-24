@@ -222,14 +222,22 @@ class Detector:
             return (self.input_width, self.input_width)
         return input_size_for(width, height, self.input_width)
 
-    def detect(self, images: list[bytes], timings: dict | None = None) -> list[list[Detection]]:
-        """JPEG のリストを推論し、フレームごとの検出結果を返す。timings に各段の ms を足す。"""
+    def _to_image(self, data) -> Image.Image:
+        """JPEG / PNG の bytes、PIL.Image、HWC の RGB uint8 配列のどれでも受け付ける。"""
+        if isinstance(data, (bytes, bytearray, memoryview)):
+            return decode_jpeg(bytes(data), self.fixed_hw[1] if self.fixed_hw else self.input_width)
+        if isinstance(data, Image.Image):
+            return data.convert("RGB") if data.mode != "RGB" else data
+        return Image.fromarray(np.asarray(data, dtype=np.uint8), "RGB")
+
+    def detect(self, images: list, timings: dict | None = None) -> list[list[Detection]]:
+        """画像のリストを推論し、フレームごとの検出結果を返す。timings に各段の ms を足す。"""
         timings = timings if timings is not None else {}
         t = time.perf_counter()
         frames: list[Frame] = []
         hws: list[tuple[int, int]] = []
         for data in images:
-            img = decode_jpeg(data, self.fixed_hw[1] if self.fixed_hw else self.input_width)
+            img = self._to_image(data)
             hw = self.input_hw(*img.size)
             frames.append(preprocess(img, hw))
             hws.append(hw)
