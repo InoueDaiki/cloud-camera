@@ -100,7 +100,7 @@ mise exec -- node scripts/e2e/browser.mjs --url https://dxxxx.cloudfront.net --o
 
 ## 所要時間(目安)
 
-`BROWSERS=chrome,webkit`(全 Lambda が本物、サンプル動画)で全体 11 分。`DUMMY_MISSING=1` でも同じくらい(待ち時間はほぼ退避と CloudFront)。
+`BROWSERS=chrome,webkit`(全 Lambda が本物、サンプル動画)で全体 11〜16 分。`DUMMY_MISSING=1` でも同じくらい(待ち時間はほぼ退避と CloudFront)。
 
 | 段階 | 秒 |
 | --- | --- |
@@ -110,7 +110,8 @@ mise exec -- node scripts/e2e/browser.mjs --url https://dxxxx.cloudfront.net --o
 | kvs / cameras / api-kvs | 各 5〜15 |
 | archive(最初の 1 分まるごとの区間が DONE になるまで) | 約 160 |
 | detect(archive の後なので待たずに済むことが多い) | 2〜60 |
-| browser(2 ブラウザ × 3 モード) | 約 40 |
+| browser(2 ブラウザ × 3 モード + PTZ。KVS の範囲が短いと最大 90 秒待つ) | 40〜100 |
+| cursors(60 秒見続ける) | 約 65 |
 | stop | 3 |
 | destroy(CloudFront の無効化と削除が大半) | 約 210 |
 
@@ -138,3 +139,4 @@ mise exec -- node scripts/e2e/browser.mjs --url https://dxxxx.cloudfront.net --o
 - `stop` の後、シャドウの desired は `streaming: false` のまま残る(destroy で Thing ごと消える)
 - 出力先の `tf.json` からは provision の後に証明書と秘密鍵を消す。`edge/.certs/gw-001/` は destroy の後に消す(その project のものだけ)
 - 検索は「直近10分で人は映った?」に hits 10 件で答えたが、回答文の数値(「1秒間に約8.4人」など)は検出数を人数のように書くことがある(lambdas/api の README のとおり、モデルの癖)
+- PTZ(Chrome、ライブ): POST から `GET .../ptz` に反映まで 2.7〜3.7 秒、焼き込みの 4 行目が変わるまで 3.1〜8.6 秒(KVS のライブ HLS の遅れが大半。エミュレーターの中では約 0.25 秒)
