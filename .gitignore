@@ -1,0 +1,25 @@
+.DS_Store
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+# ビルド成果物
+build/
+*.zip
+# エッジ用の証明書など秘密情報
+.certs/
+*.pem
+*.key
+.env
+# 大きいメディア・モデル
+*.onnx
+emulator/media/*.mp4

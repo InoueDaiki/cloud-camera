@@ -1,0 +1,10 @@
+[tools]
+terraform = "1.16.7"
+python = "3.13"
+node = "24"
+uv = "0.13.5"
+
+[env]
+AWS_PROFILE = "cloud-camera"
+AWS_REGION = "ap-northeast-1"
+AWS_DEFAULT_REGION = "ap-northeast-1"

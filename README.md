@@ -1,0 +1,11 @@
+# cloud-camera
+
+サーバーレス映像基盤の検証プロジェクト。背景と設計は [構想.md](構想.md)、コンポーネント間の約束事は [docs/contracts.md](docs/contracts.md)。
+
+## セットアップ
+
+```sh
+mise trust && mise install
+```
+
+AWS CLI のプロファイル `cloud-camera`、リージョン `ap-northeast-1` は `mise.toml` で設定される。
