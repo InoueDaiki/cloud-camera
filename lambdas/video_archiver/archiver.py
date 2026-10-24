@@ -4,7 +4,8 @@
 - 断片の一覧: ListFragments(プロデューサー時刻)。開始時刻が区間内の断片をその区間に割り当てる
 - 動画: HLS ON_DEMAND(fMP4)セッションの init と断片をそのまま連結した fMP4。ffmpeg を使わない。
   区間の途中でコーデック(コーデックプライベートデータ)が変わると、KVS の HLS は新しい EXT-X-MAP(init)を出す。
-  init ごとに部分に分け、clip.mp4、clip.1.mp4 … にする(docs/codec.md、docs/contracts.md「メディアのキー」)
+  ただし変わった後ろの断片は同じセッションでは取れないので、部分ごとにセッションを開き直し、
+  clip.mp4、clip.1.mp4 … にする(docs/codec.md、docs/contracts.md「メディアのキー」)
 - プレイリスト: clip.mp4 を EXT-X-BYTERANGE で参照する HLS(fMP4)
 - スプライト: 作った clip.mp4 のキーフレーム(1 秒に 1 枚)を PyAV でデコードし、160×90 に縮めて 10×6 のシートにする
   (`common.frames`。GetImages は使わない。lambdas/common/FRAMES.md)
@@ -187,43 +188,59 @@ def codec_of_init(init: bytes) -> str | None:
     return None
 
 
+MAX_SECTIONS = 10  # 1 区間の部分の上限(切り替えを繰り返されても HLS セッションを開きすぎない)
+
+
 def build_clips(stream: str, start: datetime, end: datetime, frags: list[kvs.Fragment]) -> list[Clip]:
     """HLS セッションの init と断片を、ListFragments で選んだ断片だけ連結する。
 
-    プレイリストの EXT-X-MAP(init)ごとに 1 つの Clip にする(区間の途中でコーデックが変わったら 2 つ以上)。
+    区間の途中でコーデックプライベートデータ(映像形式)が変わると、KVS のプレイリストには新しい EXT-X-MAP が載るが、
+    その後ろの断片は同じセッションでは取れない(400「The requested fragment does not have the same codec private data
+    as the rest of the session.」、実測)。そこで、セッションの最初の EXT-X-MAP の部分だけを取り、残りは次の部分の
+    最初の断片の時刻から HLS セッションを開き直して取る。部分ごとに 1 つの Clip にする。
     """
-    # セッションの範囲は [start, end)。プレイリストに前後の断片が入っても、断片番号で絞り込む。
-    media = open_hls(stream, start, end)
     wanted = {f.number: f for f in frags}
-    sections = [(init, [(num, url) for num, url in fr if num in wanted]) for init, fr in media.sections]
-    sections = [(init, sel) for init, sel in sections if sel]
-    got = {num for _, sel in sections for num, _ in sel}
-    missing = [n for n in wanted if n not in got]
+    done: set[str] = set()
+    clips: list[Clip] = []
+    session_start = start
+    playlist_len = 0
+    for _ in range(MAX_SECTIONS):
+        # セッションの範囲は [session_start, end)。プレイリストに前後の断片が入っても、断片番号で絞り込む。
+        media = open_hls(stream, session_start, end)
+        playlist_len = max(playlist_len, len(media.fragments))
+        init_url, first = media.sections[0]
+        sel = [(num, url) for num, url in first if num in wanted and num not in done]
+        if sel:
+            clips.append(_fetch_clip(init_url, sel, wanted))
+            done.update(num for num, _ in sel)
+        later = [num for _, fr in media.sections[1:] for num, _ in fr if num in wanted and num not in done]
+        if not later:
+            break
+        session_start = from_epoch_ms(wanted[later[0]].producer_ms)
+    missing = [n for n in wanted if n not in done]
     if missing:
         log("hls_missing_fragments", stream=stream, start=start, missing=len(missing), listed=len(wanted),
-            playlist=len(media.fragments))
-    if not sections:
-        raise ArchiveError(f"no listed fragment in HLS playlist (listed={len(wanted)}, playlist={len(media.fragments)})")
-
-    urls = [u for init, sel in sections for u in (init, *(x for _, x in sel))]
-    with ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS) as ex:
-        bodies = iter(list(ex.map(http_get, urls)))
-    clips = []
-    for _init, sel in sections:
-        init = next(bodies)
-        buf = io.BytesIO()
-        buf.write(init)
-        used = [wanted[num] for num, _ in sel]
-        parts: list[list[int]] = []
-        for dur in kvs.effective_durations(used, GAP_MS):
-            body = next(bodies)
-            parts.append([buf.tell(), len(body), dur])
-            buf.write(body)
-        clips.append(Clip(data=buf.getvalue(), init_length=len(init), parts=parts, fragments=used,
-                          codec=codec_of_init(init)))
+            playlist=playlist_len, sections=len(clips))
+    if not clips:
+        raise ArchiveError(f"no listed fragment in HLS playlist (listed={len(wanted)}, playlist={playlist_len})")
     if len(clips) > 1:
         log("clip_sections", stream=stream, start=start, sections=len(clips), codecs=[c.codec for c in clips])
     return clips
+
+
+def _fetch_clip(init_url: str, sel: list[tuple[str, str]], wanted: dict[str, kvs.Fragment]) -> Clip:
+    urls = [init_url] + [u for _, u in sel]
+    with ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS) as ex:
+        bodies = list(ex.map(http_get, urls))
+    init, rest = bodies[0], bodies[1:]
+    buf = io.BytesIO()
+    buf.write(init)
+    used = [wanted[num] for num, _ in sel]
+    parts: list[list[int]] = []
+    for body, dur in zip(rest, kvs.effective_durations(used, GAP_MS)):
+        parts.append([buf.tell(), len(body), dur])
+        buf.write(body)
+    return Clip(data=buf.getvalue(), init_length=len(init), parts=parts, fragments=used, codec=codec_of_init(init))
 
 
 def build_clip(stream: str, start: datetime, end: datetime, frags: list[kvs.Fragment]) -> Clip:

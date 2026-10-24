@@ -357,3 +357,31 @@ def test_build_sprite_from_two_codecs():
     sp = build_sprite([h265, h264], start, start + timedelta(minutes=1))
     assert sp.error is None and sp.frames == 4
     assert PILImage.open(io.BytesIO(sp.jpeg)).size == (1600, 540)
+
+
+def test_build_clips_reopens_session_after_codec_switch(monkeypatch):
+    """KVS は CPD が変わった後ろの断片を同じセッションでは返さないので、次の部分の最初の断片の時刻から開き直す。"""
+    second = MEDIA_SWITCH.replace("SequenceNumber=3", "s2").split("#EXT-X-MAP")[0] + (
+        '#EXT-X-MAP:URI="getMP4InitFragment.mp4?SessionToken=xyz&TrackNumber=1"\n'
+        "#EXTINF:1.000,\ngetMP4MediaFragment.mp4?FragmentNumber=200&SessionToken=xyz\n#EXT-X-ENDLIST\n")
+    sessions = []
+
+    def fake_open(stream, s, e):
+        sessions.append(s)
+        return parse_media_playlist(MEDIA_SWITCH if len(sessions) == 1 else second, BASE + "m.m3u8")
+
+    def fake_get(url):
+        if "Init" in url:
+            assert "SequenceNumber" not in url  # 1 つ目のセッションの 2 つ目の init は使わない
+            return (b"S1" if "abc" in url else b"S2") * 4
+        if "abc" in url:
+            assert archiver._fragment_number(url) in ("100", "101")  # 1 つ目のセッションでは前の部分だけ取る
+        return archiver._fragment_number(url).encode()
+
+    monkeypatch.setattr(archiver, "open_hls", fake_open)
+    monkeypatch.setattr(archiver, "http_get", fake_get)
+    frs = [frag(100, T(10, 20, 0)), frag(101, T(10, 20, 1)), frag(200, T(10, 20, 8))]
+    clips = archiver.build_clips("s", T(10, 20), T(10, 21), frs)
+    assert sessions == [T(10, 20), T(10, 20, 8)]
+    assert [[f.number for f in c.fragments] for c in clips] == [["100", "101"], ["200"]]
+    assert clips[0].data == b"S1" * 4 + b"100101" and clips[1].data == b"S2" * 4 + b"200"

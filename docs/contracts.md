@@ -53,11 +53,13 @@
 | `clip.mp4` | その 1 分の動画。単体で再生できる fragmented MP4(init + 断片を連結したもの)が第一候補 |
 | `index.m3u8` | その 1 分の HLS(fMP4)プレイリスト。`clip.mp4` を `EXT-X-BYTERANGE` で参照する |
 | `sprite.jpg` | 1 秒おきのサムネイル 60 枚を 1 枚にまとめたシート。1 コマ 160×90、横 10 × 縦 6、左上から時刻順 |
+| `clip.1.mp4`、`clip.2.mp4` … | 区間の途中で映像形式(コーデックプライベートデータ)が変わったときの 2 つ目以降の部分。`clip.mp4` は 1 つ目の部分。`index.m3u8` は部分の頭で `EXT-X-DISCONTINUITY` と `EXT-X-MAP` を切り替える([codec.md](codec.md)) |
 
 - `sprite.jpg` のコマ i(0〜59)は、枠 [区間の開始 + i 秒, + i + 1 秒) に入る **キーフレームの絵**(video_archiver が `clip.mp4` からデコードする。GetImages は使わない)。
   絵の時刻は秒ちょうどではなく、その秒の中のキーフレームの実際の時刻(キーフレームの位相は送信開始時刻で決まり、実測では枠の開始から 0.5〜1 秒後)
 - 区間の頭の枠には、その区間に始まる断片のキーフレームが入る(前の区間の断片から続く部分は使わない)。キーフレームが 2 秒おきなら枠は 1 つおきに空く
 - 録画がない秒(キーフレームがない枠)のコマは黒にする。録画の有無は DynamoDB の `segments` で区別できる
+- 部分が 2 つ以上の区間は、部分ごとにキーフレームをデコードして 1 枚のシートにする
 
 ## DynamoDB: `{p}-state`
 
@@ -82,8 +84,9 @@ PK `camera_id`(S)、SK `sk`(S)。TTL 属性 `expires_at`(数値、epoch 秒)。
 | --- | --- | --- | --- |
 | `video_status` | video_archiver | S | `DONE` / `EMPTY` / `FAILED` |
 | `segments` | video_archiver | L | 録画がある範囲 `[[開始ms, 終了ms], ...]`(epoch ミリ秒の数値ペア)。断片は開始時刻の区間に入るので、最後の終わりは区間の終わりを断片 1 本ぶんまで越えることがある |
-| `files` | video_archiver | M | `{"clip": key, "playlist": key, "sprite": key}` |
-| `hls` | video_archiver | M | `{"init_length": n, "parts": [[offset, length, duration_ms], ...]}`。API が複数区間のプレイリストを組むのに使う |
+| `files` | video_archiver | M | `{"clip": key, "playlist": key, "sprite": key}`。部分が 2 つ以上なら `"clips": [key, ...]`(1 つ目は `clip` と同じ) |
+| `hls` | video_archiver | M | `{"init_length": n, "parts": [[offset, length, duration_ms], ...]}`(1 つ目の部分)。API が複数区間のプレイリストを組むのに使う。部分が 2 つ以上なら `"sections": [{"clip": key, "init_length", "parts", "codec", "start_ms"}, ...]`(すべての部分。読む側は `sections` があればそちらを使う) |
+| `codecs` | video_archiver | L | 部分ごとの映像形式 `["H265"]`、途中で切り替わった区間は `["H265", "H264"]`(init のサンプルエントリから。不明は `""`) |
 | `fragment_count` / `bytes` | video_archiver | N | 実測値 |
 | `sprite_frames` / `sprite_error` | video_archiver | N / S | スプライトに入ったコマ数(0〜60)、キーフレームのデコードに失敗した理由(あれば。動画は `DONE` で退避する) |
 | `video_duration_ms` / `video_attempts` | video_archiver | N | 実行時間、試行回数 |
@@ -121,7 +124,7 @@ def run_pipeline(kind: Literal["VIDEO", "DETECT"], camera_id: str,
 **物体検出は動画の退避を待つ(上流)**: 物体検出は動画の退避が置いた `clip.mp4` を読むので、`run_pipeline(..., upstream_kind="VIDEO")` で動かす。
 - 区間 [s, e) は `CURSOR#VIDEO` の `processed_until` ≥ e のときだけ処理する(**物体検出の処理済み位置は動画の退避の処理済み位置を越えない**)。
   満たさなければ止めて次の起動を待つ(`stopped = waiting_upstream`、試行回数に数えない)。このとき物体検出は自分のウォーターマークを見ない(動画の退避が判定済み)
-- 区間の件の `video_status` で分岐する: `DONE` → `clip.mp4` からキーフレームをデコード、`EMPTY` → 検出なし(`detect_status = EMPTY`)、
+- 区間の件の `video_status` で分岐する: `DONE` → `clip.mp4`(`hls.sections` があれば部分ごとの clip)からキーフレームをデコード、`EMPTY` → 検出なし(`detect_status = EMPTY`)、
   `FAILED` → 予備の経路(KVS の GetImages)、件がない → `NotReady`
 - 動画の退避が区間の終わりから `UPSTREAM_MAX_WAIT_SECONDS`(環境変数、既定 1800 秒)を過ぎても進まないときだけ、上流を待たずに
   自分のウォーターマークで判定し、予備の経路で処理する(KVS の保持 1 時間の内に)
@@ -157,12 +160,17 @@ Scheduler からの入力は `{"camera_id": "cam-001"}`。カメラごとに 1 �
   "username": "admin", "password": "admin",
   "profile_token": null,
   "prefer_codec": null,
+  "codec": null,
   "streaming": true
 }}}}}
 ```
 
-`reported` はエッジが実際の状態(`streaming`、`rtsp_url`、`codec`(`H265` / `H264`)、`resolution`、`error`)を返す。`profile_token` が null なら `prefer_codec`(`H265` / `H264`。null ならエッジの `CC_PREFER_CODEC`、既定 `H265`)のプロファイルを自動選択し、なければもう一方のコーデックを使う(再エンコードしない)。
-desired に `rtsp_url`(と `codec`)を書くと ONVIF を使わずにその URL を直接使う(検証用)。
+`reported` はエッジが実際の状態(`streaming`、`rtsp_url`、`codec`(`H265` / `H264`)、`codec_error`、`resolution`、`error`)を返す。`profile_token` が null なら `prefer_codec`(`H265` / `H264`。null ならエッジの `CC_PREFER_CODEC`、既定 `H265`)のプロファイルを自動選択し、なければもう一方のコーデックを使う(再エンコードしない)。
+desired の `codec`(`H265` / `H264`、ビューワーの「映像形式」)は、ONVIF のカメラなら **カメラのエンコーダーをその形式に切り替える**:
+対象のプロファイル(`profile_token`、なければ最大解像度)の Encoding を Media2 の SetVideoEncoderConfiguration で変え、
+パイプラインを組み直す(配信は数秒途切れる)。変えられなければその形式のプロファイルを選び、それもなければもう一方のまま送り、
+理由を `reported.codec_error` に書く。`codec` があれば `prefer_codec` より優先する。
+desired に `rtsp_url`(と `codec`)を書くと ONVIF を使わずにその URL を直接使う(検証用。このときの `codec` は RTSP の形式の申告)。
 シャドウは null を書くとキーを消すので、`error` などが null のときはキーがない(読む側は「ない = null」として扱う)。
 
 `reported` の最上位には次も入れる(ビューワーのオンライン表示用):
@@ -212,12 +220,14 @@ status の `cameras.*.buffer`(回線断のバッファ。`sink=kvs` のときだ
 | --- | --- |
 | `GET /api/cameras` | カメラ一覧と状態(シャドウの reported、処理済み位置) |
 | `PUT /api/cameras/{id}/streaming` | `{"streaming": bool}` でシャドウの desired を更新 |
+| `PUT /api/cameras/{id}/codec` | `{"codec": "H265" \| "H264"}`(`H.265`、`HEVC` なども受ける)でシャドウの desired の `codec` を更新。`{"camera_id", "codec", "version"}` |
 | `GET /api/cameras/{id}/timeline?from=&to=` | 録画範囲。レスポンス下記 |
-| `GET /api/cameras/{id}/vod.m3u8?from=&to=` | S3 退避済み区間を連結した HLS プレイリスト(区間ごとに `EXT-X-DISCONTINUITY`、`EXT-X-MAP`、`EXT-X-PROGRAM-DATE-TIME`)。セグメントの URI は `/media/...` |
+| `GET /api/cameras/{id}/vod.m3u8?from=&to=` | S3 退避済み区間を連結した HLS プレイリスト(区間ごとに `EXT-X-DISCONTINUITY`、`EXT-X-MAP`、`EXT-X-PROGRAM-DATE-TIME`)。セグメントの URI は `/media/...`。区間の途中で映像形式が変わった区間は部分(`hls.sections`)ごとに同じ 3 つを入れる。メディアプレイリストなので `CODECS` 属性はなく、プレーヤーは各 `EXT-X-MAP` の init から形式を読む(H.265 と H.264 が混ざってよい) |
 | `GET /api/cameras/{id}/kvs-hls?mode=LIVE\|ON_DEMAND&from=&to=` | KVS の HLS セッション URL(`{"url", "expires_at"}`)。fMP4 を指定 |
 | `POST /api/search` | `{"question": "..."}` → `{"answer": "...", "hits": [{"camera_id", "ts", "label", "confidence"}], "sql": "...", "usage": {...}}` |
 
-ビューワーが cameras の `reported` / `desired` から読む項目: `streaming`、`codec`、`resolution`、`error`(`reported`)、`streaming`(`desired`)、`name`(どちらか。なければ camera_id を表示)。
+ビューワーが cameras の `reported` / `desired` から読む項目: `streaming`、`codec`、`codec_error`、`resolution`、`error`(`reported`)、`streaming`、`codec`(`desired`)、`name`(どちらか。なければ camera_id を表示)。
+`desired.codec` と `reported.codec` が違う間は「切り替え中」と表示する。
 cameras の各項目の `online` はゲートウェイの死活(bool か null)。シャドウの `reported.online` が true でも `last_seen` が 90 秒より古ければ false、シャドウに情報がなければ null(ビューワーは「不明」として表示しない)。
 
 timeline のレスポンス:
@@ -240,7 +250,7 @@ timeline のレスポンス:
 - エラーはすべて `{"error": {"code": "...", "message": "..."}}`(例: `BAD_REQUEST`、`RANGE_TOO_LARGE`、`CAMERA_NOT_FOUND`、`NO_RECORDING`、`NO_FRAGMENTS`)
 - `GET /api/cameras` → `{"cameras": [{"camera_id", "gateway_id", "stream_name", "reported", "desired"(password は伏せる), "reported_at", "video_processed_until", "detect_processed_until"}]}`
 - `PUT .../streaming` → `{"camera_id", "streaming", "version"}`
-- timeline に `now` を追加
+- timeline に `now` を追加。`minutes[]` に `codecs`(区間の件の `codecs`。あれば)を追加
 - kvs-hls に `mode` を追加
 - search: `hits[]` に `ts_jst` を追加。`sql` は最後に実行した SQL(なければ null)。`queries`(実行した SQL ごとのスキャン量・エラー)を追加。
   `usage` は `{"input_tokens", "output_tokens", "total_tokens", "model_id", "bedrock_calls", "tool_calls", "athena_bytes_scanned", "elapsed_ms", ...}`
@@ -255,7 +265,8 @@ timeline のレスポンス:
 - 既定のデバイスサービス URL: `http://<host>:8080/onvif/device_service`、既定の認証情報 `admin` / `admin`
   - カメラ n 台目は **ポートで分ける**: `http://<host>:{8080 + n - 1}/onvif/device_service`(cam1 = 8080、cam2 = 8081 …)。既定 2 台、カメラ名(ONVIF の name スコープと Hostname)は `cam-001` 形式
   - 認証なしで呼べるのは GetSystemDateAndTime、GetCapabilities、GetServices、GetServiceCapabilities、GetHostname、GetWsdlUrl、GetEndpointReference。誤った認証は SOAP Fault `env:Sender` / `ter:NotAuthorized`(HTTP 400)。PasswordText も受け付ける
-- Media2: `GetProfiles` は **`Type=["All"]`(または `VideoEncoder`)を指定したときだけ** Configurations を返す(ONVIF の仕様どおり)。main(token `Profile_Main`)の `Configurations.VideoEncoder.Encoding` は既定 `"H265"`、カメラごとの設定(`main_codec`)で `"H264"`。sub(`Profile_Sub`)は常に `"H264"`。`SetVideoEncoderConfiguration` でビットレート、GovLength、フレームレート、Quality を変えられ、配信が数秒途切れて再起動する(解像度とコーデックは固定)
+- Media2: `GetProfiles` は **`Type=["All"]`(または `VideoEncoder`)を指定したときだけ** Configurations を返す(ONVIF の仕様どおり)。main(token `Profile_Main`)の `Configurations.VideoEncoder.Encoding` は既定 `"H265"`、カメラごとの設定(`main_codec`)で `"H264"`。sub(`Profile_Sub`)は常に `"H264"`。`SetVideoEncoderConfiguration` でビットレート、GovLength、フレームレート、Quality を変えられ、配信が数秒途切れて再起動する。
+  main は Media2 の Encoding(`H265` / `H264`)も変えられる(実行中の切り替え。sub は H.264 固定、解像度は固定)。`GetVideoEncoderConfigurationOptions` は main に両方の Options を返す
 - Media(ver10): Encoding に H265 がないため、H.265 の `Profile_Main` は VideoEncoderConfiguration を持たない(GetStreamUri は使える)。main を H.264 にしたカメラは main も持つ
 - RTSP: `rtsp://<host>:8554/cam{n}/main`(既定 H.265。`main_codec` で H.264)、`.../sub`(H.264、低解像度)。キーフレーム間隔 1 秒(設定可)、VBR。RTSP の認証は既定でなし(`EMULATOR_RTSP_AUTH=true` でカメラの認証情報が必要)
 - スナップショット: `http://<host>:{ONVIF ポート}/onvif/snapshot.jpg`(1 秒ごとに更新、認証なし)

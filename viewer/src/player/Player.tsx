@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActionIcon,
   Alert,
@@ -78,6 +78,16 @@ export function Player({ pb, camera, now }: Props) {
     refetchInterval: viewDate === today ? 30_000 : false,
   });
   const data = timeline.data;
+
+  // 映像形式が切り替わったら、ライブの HLS セッションを開き直す(KVS は形式が変わった後の断片を、
+  // 切り替え前に開いたセッションでは返さない。docs/codec.md)
+  const liveCodec = source === 'live' ? (camera?.codec ?? null) : null;
+  const seenCodec = useRef<string | null>(liveCodec);
+  useEffect(() => {
+    const prev = seenCodec.current;
+    seenCodec.current = liveCodec;
+    if (prev !== null && liveCodec !== null && prev !== liveCodec) retry();
+  }, [liveCodec, retry]);
 
   useEffect(() => {
     if (!notice) return;
