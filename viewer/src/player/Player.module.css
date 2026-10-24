@@ -39,6 +39,13 @@
   pointer-events: none;
 }
 
+/* カメラが映像に焼き込んだ文字(多くは左上)と重なっても読めるよう、右上の表示と同じ下地を敷く */
+.titleChip {
+  padding: 4px 10px;
+  border-radius: var(--mantine-radius-sm);
+  background: var(--cc-video-overlay);
+}
+
 .camName {
   font-weight: 600;
   font-size: var(--mantine-font-size-md);

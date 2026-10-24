@@ -191,7 +191,7 @@ export function Player({ pb, camera, now }: Props) {
       <div className={classes.stage}>
         <video ref={attachVideo} className={classes.video} muted playsInline autoPlay />
         <div className={classes.overlayTop}>
-          <div>
+          <div className={classes.titleChip}>
             <div className={classes.camName}>{camera?.name ?? cameraId}</div>
             <div className={`${classes.clock} tabular`}>{pos !== null ? formatDateTime(pos) : '—'}</div>
           </div>

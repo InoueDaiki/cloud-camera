@@ -24,7 +24,8 @@ cmd_for() {
     detector)       echo "cd lambdas/detector && uv run pytest -q" ;;
     api)            echo "cd lambdas/api && uv run pytest -q" ;;
     cost)           echo "cd tools/cost && uv run pytest -q" ;;
-    viewer)         echo "cd viewer && { [[ -d node_modules ]] || npm ci --silent; } && npm run -s lint && npm run -s typecheck && npm run -s test" ;;
+    # package-lock.json が node_modules より新しければ入れ直す(依存が増えたとき)
+    viewer)         echo "cd viewer && { [[ node_modules/.package-lock.json -nt package-lock.json ]] || npm ci --silent; } && npm run -s lint && npm run -s typecheck && npm run -s test" ;;
     infra)          echo "cd infra && terraform fmt -check -recursive && terraform init -backend=false -input=false >/dev/null && terraform validate -no-color" ;;
   esac
 }
