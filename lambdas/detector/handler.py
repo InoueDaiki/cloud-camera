@@ -25,7 +25,7 @@ from detect import Detector
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # 既定のモデル(models/{DETECT_MODEL}.onnx)。選定理由は README.md のベンチマーク
-DEFAULT_MODEL = "yolox_tiny.int8"
+DEFAULT_MODEL = "yolox_tiny.int8s8"
 
 _detector: Detector | None = None
 _s3 = None

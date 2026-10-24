@@ -38,9 +38,9 @@ def key(r) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("results")
+    ap.add_argument("results", nargs="+", help="JSONL(複数可。同じ設定は後のファイルが優先)")
     a = ap.parse_args()
-    rows = [json.loads(line) for line in open(a.results)]
+    rows = [json.loads(line) for f in a.results for line in open(f)]
     rows = [r for r in rows if "total_ms" in r]
     by = defaultdict(dict)
     mems = sorted({r["memory"] for r in rows})

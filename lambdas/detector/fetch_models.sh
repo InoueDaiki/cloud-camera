@@ -4,7 +4,7 @@
 # 1. YOLOX(Apache-2.0)の公式 ONNX を models/ に取得し、SHA-256 を確かめる
 #    出典: Megvii-BaseDetection/YOLOX のリリース 0.1.1rc0
 # 2. INT8 量子化のキャリブレーション画像(darknet の data/、パブリックドメイン)を models/calib/ に取得する
-# 3. tools/prepare_model.py で入力可変版(*.dyn.onnx)と INT8 版(*.int8.onnx)を作る
+# 3. tools/prepare_model.py で入力可変版(*.dyn.onnx)と INT8 版(*.int8.onnx、*.int8s8.onnx)を作る
 #
 # 使い方: lambdas/detector/fetch_models.sh            # 既定は yolox_nano と yolox_tiny
 #        MODELS="yolox_s" lambdas/detector/fetch_models.sh
@@ -30,8 +30,8 @@ done
 
 cd "$HERE"
 for m in ${MODELS:-yolox_nano yolox_tiny}; do
-  if [ ! -f "models/$m.int8.onnx" ]; then
-    mise exec -- uv run python tools/prepare_model.py "models/$m.onnx" --calib-dir models/calib 2>&1 | grep -v WARN
+  if [ ! -f "models/$m.int8s8.onnx" ]; then
+    mise exec -- uv run python tools/prepare_model.py "models/$m.onnx" --calib-dir models/calib --s8s8 2>&1 | grep -v WARN
   fi
 done
 ls -la models/*.onnx

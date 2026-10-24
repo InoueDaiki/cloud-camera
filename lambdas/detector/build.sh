@@ -14,7 +14,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 ARCH="${ARCH:-arm64}"
-MODELS="${MODELS:-yolox_tiny.int8}"
+MODELS="${MODELS:-yolox_tiny.int8s8}"
 case "$ARCH" in
   arm64) PLATFORM=aarch64-manylinux_2_28; OUT="$ROOT/build/detector.zip" ;;
   x86_64) PLATFORM=x86_64-manylinux_2_28; OUT="$ROOT/build/detector-x86_64.zip" ;;

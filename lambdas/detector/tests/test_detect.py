@@ -66,7 +66,7 @@ def test_postprocess_decodes_and_normalizes():
 
 
 def _models():
-    names = ["yolox_nano.dyn", "yolox_tiny.dyn", "yolox_tiny.int8", "yolox_nano.int8"]
+    names = ["yolox_nano.dyn", "yolox_tiny.dyn", "yolox_tiny.int8", "yolox_tiny.int8s8", "yolox_nano.int8"]
     return [n for n in names if os.path.exists(os.path.join(MODELS, n + ".onnx"))]
 
 
