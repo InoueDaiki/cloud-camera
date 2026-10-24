@@ -16,6 +16,7 @@ import { useDisclosure, useLocalStorage, useMediaQuery } from '@mantine/hooks';
 import { useQuery } from '@tanstack/react-query';
 import { IconDeviceDesktop, IconMoon, IconSun, IconVideo } from '@tabler/icons-react';
 import { api } from './api/client';
+import { isCodecSwitching } from './lib/codec';
 import { CameraList } from './cameras/CameraList';
 import { Player } from './player/Player';
 import { usePlayback } from './player/usePlayback';
@@ -37,7 +38,12 @@ export function App() {
   const now = useNow();
   const [savedCamera, setSavedCamera] = useLocalStorage<string | null>({ key: 'cc-camera', defaultValue: null });
 
-  const cameras = useQuery({ queryKey: ['cameras'], queryFn: api.cameras, refetchInterval: 15_000 });
+  // 映像形式の切り替え中は、終わったことがすぐ分かるように 3 秒ごとに取り直す
+  const cameras = useQuery({
+    queryKey: ['cameras'],
+    queryFn: api.cameras,
+    refetchInterval: (q) => (q.state.data?.cameras.some(isCodecSwitching) ? 3_000 : 15_000),
+  });
   const list = cameras.data?.cameras;
 
   const processedUntil = useCallback(

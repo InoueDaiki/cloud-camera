@@ -1,0 +1,274 @@
+[
+ {
+  "scene": "crosswalk",
+  "preset": "medium",
+  "targets": {
+   "85.0": {
+    "h264_kbps": 1170.2,
+    "h265_kbps": 985.3,
+    "ratio_h264_over_h265": 1.188,
+    "h264_crf": 33.0,
+    "h265_crf": 34.8
+   },
+   "90.0": {
+    "h264_kbps": 1466.7,
+    "h265_kbps": 1280.4,
+    "ratio_h264_over_h265": 1.146,
+    "h264_crf": 30.8,
+    "h265_crf": 32.5
+   },
+   "93.0": {
+    "h264_kbps": 1745.8,
+    "h265_kbps": 1536.7,
+    "ratio_h264_over_h265": 1.136,
+    "h264_crf": 29.1,
+    "h265_crf": 30.8
+   },
+   "95.0": {
+    "h264_kbps": 2042.3,
+    "h265_kbps": 1791.7,
+    "ratio_h264_over_h265": 1.14,
+    "h264_crf": 27.6,
+    "h265_crf": 29.4
+   }
+  },
+  "bd_ratio_vmaf": 1.153,
+  "bd_ratio_psnr": 1.19,
+  "h264_decode_key_ms": 18.66,
+  "h264_decode_all_ms": 5.46,
+  "h265_decode_key_ms": 19.43,
+  "h265_decode_all_ms": 5.95
+ },
+ {
+  "scene": "crosswalk",
+  "preset": "ultrafast",
+  "targets": {
+   "85.0": {
+    "h264_kbps": 1922.7,
+    "h265_kbps": 1155.8,
+    "ratio_h264_over_h265": 1.664,
+    "h264_crf": 34.3,
+    "h265_crf": 34.1
+   },
+   "90.0": {
+    "h264_kbps": 2486.1,
+    "h265_kbps": 1529.3,
+    "ratio_h264_over_h265": 1.626,
+    "h264_crf": 32.1,
+    "h265_crf": 31.8
+   },
+   "93.0": {
+    "h264_kbps": 2997.2,
+    "h265_kbps": 1874.1,
+    "ratio_h264_over_h265": 1.599,
+    "h264_crf": 30.4,
+    "h265_crf": 30.1
+   },
+   "95.0": {
+    "h264_kbps": 3497.3,
+    "h265_kbps": 2235.0,
+    "ratio_h264_over_h265": 1.565,
+    "h264_crf": 28.9,
+    "h265_crf": 28.6
+   }
+  },
+  "bd_ratio_vmaf": 1.624,
+  "bd_ratio_psnr": 1.572,
+  "base": {
+   "h265_crf": 28,
+   "h265_kbps": 2388.1,
+   "vmaf": 95.743,
+   "h264_crf": 28.4,
+   "h264_kbps": 3722.1,
+   "ratio": 1.559
+  },
+  "h264_decode_key_ms": 8.4,
+  "h264_decode_all_ms": 2.84,
+  "h265_decode_key_ms": 21.36,
+  "h265_decode_all_ms": 6.25
+ },
+ {
+  "scene": "still",
+  "preset": "medium",
+  "targets": {
+   "85.0": {
+    "h264_kbps": 571.4,
+    "h265_kbps": 492.4,
+    "ratio_h264_over_h265": 1.16,
+    "h264_crf": 33.4,
+    "h265_crf": 35.2
+   },
+   "90.0": {
+    "h264_kbps": 797.2,
+    "h265_kbps": 719.3,
+    "ratio_h264_over_h265": 1.108,
+    "h264_crf": 29.9,
+    "h265_crf": 31.1
+   },
+   "93.0": {
+    "h264_kbps": 1275.5,
+    "h265_kbps": 1119.3,
+    "ratio_h264_over_h265": 1.14,
+    "h264_crf": 25.4,
+    "h265_crf": 26.4
+   },
+   "95.0": {
+    "h264_kbps": null,
+    "h265_kbps": null,
+    "ratio_h264_over_h265": null,
+    "h264_crf": null,
+    "h265_crf": null
+   }
+  },
+  "bd_ratio_vmaf": 1.139,
+  "bd_ratio_psnr": 1.32,
+  "h264_decode_key_ms": 24.65,
+  "h264_decode_all_ms": 4.34,
+  "h265_decode_key_ms": 21.55,
+  "h265_decode_all_ms": 2.77
+ },
+ {
+  "scene": "still",
+  "preset": "ultrafast",
+  "targets": {
+   "85.0": {
+    "h264_kbps": 891.2,
+    "h265_kbps": 593.3,
+    "ratio_h264_over_h265": 1.502,
+    "h264_crf": 35.7,
+    "h265_crf": 34.9
+   },
+   "90.0": {
+    "h264_kbps": 1288.6,
+    "h265_kbps": 886.5,
+    "ratio_h264_over_h265": 1.454,
+    "h264_crf": 31.1,
+    "h265_crf": 30.6
+   },
+   "93.0": {
+    "h264_kbps": 1985.1,
+    "h265_kbps": 1419.0,
+    "ratio_h264_over_h265": 1.399,
+    "h264_crf": 25.9,
+    "h265_crf": 25.5
+   },
+   "95.0": {
+    "h264_kbps": 8339.2,
+    "h265_kbps": null,
+    "ratio_h264_over_h265": null,
+    "h264_crf": 19.7,
+    "h265_crf": null
+   }
+  },
+  "bd_ratio_vmaf": 1.448,
+  "bd_ratio_psnr": 1.316,
+  "base": {
+   "h265_crf": 28,
+   "h265_kbps": 1127.1,
+   "vmaf": 91.838,
+   "h264_crf": 28.5,
+   "h264_kbps": 1582.2,
+   "ratio": 1.404
+  },
+  "h264_decode_key_ms": 10.42,
+  "h264_decode_all_ms": 2.14,
+  "h265_decode_key_ms": 25.31,
+  "h265_decode_all_ms": 3.25
+ },
+ {
+  "scene": "testsrc",
+  "preset": "ultrafast",
+  "targets": {
+   "85.0": {
+    "h264_kbps": null,
+    "h265_kbps": null,
+    "ratio_h264_over_h265": null,
+    "h264_crf": null,
+    "h265_crf": null
+   },
+   "90.0": {
+    "h264_kbps": null,
+    "h265_kbps": null,
+    "ratio_h264_over_h265": null,
+    "h264_crf": null,
+    "h265_crf": null
+   },
+   "93.0": {
+    "h264_kbps": null,
+    "h265_kbps": null,
+    "ratio_h264_over_h265": null,
+    "h264_crf": null,
+    "h265_crf": null
+   },
+   "95.0": {
+    "h264_kbps": null,
+    "h265_kbps": null,
+    "ratio_h264_over_h265": null,
+    "h264_crf": null,
+    "h265_crf": null
+   }
+  },
+  "bd_ratio_vmaf": null,
+  "bd_ratio_psnr": 1.067,
+  "base": {
+   "h265_crf": 28,
+   "h265_kbps": 514.5,
+   "vmaf": 97.956,
+   "h264_crf": 28.9,
+   "h264_kbps": 581.3,
+   "ratio": 1.13
+  },
+  "h264_decode_key_ms": 2.06,
+  "h264_decode_all_ms": 0.88,
+  "h265_decode_key_ms": 6.74,
+  "h265_decode_all_ms": 1.82
+ },
+ {
+  "scene": "traffic",
+  "preset": "ultrafast",
+  "targets": {
+   "85.0": {
+    "h264_kbps": null,
+    "h265_kbps": 795.0,
+    "ratio_h264_over_h265": null,
+    "h264_crf": null,
+    "h265_crf": 36.2
+   },
+   "90.0": {
+    "h264_kbps": 1762.7,
+    "h265_kbps": 1022.2,
+    "ratio_h264_over_h265": 1.724,
+    "h264_crf": 34.0,
+    "h265_crf": 34.0
+   },
+   "93.0": {
+    "h264_kbps": 2077.5,
+    "h265_kbps": 1223.4,
+    "ratio_h264_over_h265": 1.698,
+    "h264_crf": 32.5,
+    "h265_crf": 32.4
+   },
+   "95.0": {
+    "h264_kbps": 2359.5,
+    "h265_kbps": 1410.5,
+    "ratio_h264_over_h265": 1.673,
+    "h264_crf": 31.2,
+    "h265_crf": 31.2
+   }
+  },
+  "bd_ratio_vmaf": 1.708,
+  "bd_ratio_psnr": 1.611,
+  "base": {
+   "h265_crf": 28,
+   "h265_kbps": 2025.0,
+   "vmaf": 98.166,
+   "h264_crf": 28.3,
+   "h264_kbps": 3195.5,
+   "ratio": 1.578
+  },
+  "h264_decode_key_ms": 7.31,
+  "h264_decode_all_ms": 2.6,
+  "h265_decode_key_ms": 17.34,
+  "h265_decode_all_ms": 5.76
+ }
+]

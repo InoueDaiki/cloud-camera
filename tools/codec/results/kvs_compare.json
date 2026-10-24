@@ -1,0 +1,156 @@
+{
+ "cam-001": {
+  "stream": "cc-tmp-codec-cam-001",
+  "media_type": "video/h265",
+  "hls_codecs": "avc1.42c020",
+  "seconds": 1140.0,
+  "putmedia_incoming_bytes": 355634804.0,
+  "putmedia_kbps": 2495.7,
+  "fragments": 1010,
+  "fragment_bytes": 326092013,
+  "fragment_kbps": 2288.4,
+  "minutes_done": 19,
+  "video_duration_ms": {
+   "n": 19,
+   "mean": 4868.9,
+   "median": 5020.0,
+   "p90": 5571.0,
+   "max": 5596.0
+  },
+  "detect_duration_ms": {
+   "n": 19,
+   "mean": 9283.3,
+   "median": 9200.0,
+   "p90": 10416.0,
+   "max": 10649.0
+  },
+  "segment_bytes": {
+   "n": 19,
+   "mean": 17138117.1,
+   "median": 17018755.0,
+   "p90": 19344357.0,
+   "max": 19351016.0
+  },
+  "sprite_frames": {
+   "n": 19,
+   "mean": 53.2,
+   "median": 53.0,
+   "p90": 60.0,
+   "max": 60.0
+  },
+  "detect_frames": {
+   "n": 19,
+   "mean": 53.2,
+   "median": 53.0,
+   "p90": 60.0,
+   "max": 60.0
+  },
+  "detect_count": {
+   "n": 19,
+   "mean": 1658.8,
+   "median": 1636.0,
+   "p90": 1865.0,
+   "max": 1874.0
+  },
+  "s3_bytes": {
+   "clip.mp4": {
+    "n": 19,
+    "mean": 17138117.1,
+    "median": 17018755.0,
+    "p90": 19344357.0,
+    "max": 19351016.0
+   },
+   "sprite.jpg": {
+    "n": 19,
+    "mean": 231514.4,
+    "median": 230566.0,
+    "p90": 257258.0,
+    "max": 257569.0
+   },
+   "index.m3u8": {
+    "n": 19,
+    "mean": 3235.3,
+    "median": 3220.0,
+    "p90": 3618.0,
+    "max": 3618.0
+   }
+  }
+ },
+ "cam-002": {
+  "stream": "cc-tmp-codec-cam-002",
+  "media_type": "video/h264",
+  "hls_codecs": "avc1.42c020",
+  "seconds": 1140.0,
+  "putmedia_incoming_bytes": 588785325.0,
+  "putmedia_kbps": 4131.8,
+  "fragments": 1140,
+  "fragment_bytes": 589062345,
+  "fragment_kbps": 4133.8,
+  "minutes_done": 19,
+  "video_duration_ms": {
+   "n": 19,
+   "mean": 3174.3,
+   "median": 3157.0,
+   "p90": 3323.0,
+   "max": 3325.0
+  },
+  "detect_duration_ms": {
+   "n": 19,
+   "mean": 9711.7,
+   "median": 9409.0,
+   "p90": 9659.0,
+   "max": 15008.0
+  },
+  "segment_bytes": {
+   "n": 19,
+   "mean": 30979580.3,
+   "median": 30961816.0,
+   "p90": 31316721.0,
+   "max": 31608074.0
+  },
+  "sprite_frames": {
+   "n": 19,
+   "mean": 60.0,
+   "median": 60.0,
+   "p90": 60.0,
+   "max": 60.0
+  },
+  "detect_frames": {
+   "n": 19,
+   "mean": 60.0,
+   "median": 60.0,
+   "p90": 60.0,
+   "max": 60.0
+  },
+  "detect_count": {
+   "n": 19,
+   "mean": 1867.6,
+   "median": 1862.0,
+   "p90": 1902.0,
+   "max": 1906.0
+  },
+  "s3_bytes": {
+   "clip.mp4": {
+    "n": 19,
+    "mean": 30979580.3,
+    "median": 30961816.0,
+    "p90": 31316721.0,
+    "max": 31608074.0
+   },
+   "sprite.jpg": {
+    "n": 19,
+    "mean": 257813.4,
+    "median": 257682.0,
+    "p90": 259223.0,
+    "max": 259410.0
+   },
+   "index.m3u8": {
+    "n": 19,
+    "mean": 3629.6,
+    "median": 3629.0,
+    "p90": 3633.0,
+    "max": 3633.0
+   }
+  }
+ }
+}
