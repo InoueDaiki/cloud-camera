@@ -140,11 +140,13 @@ def measure_one(ref: Path, codec: str, preset: str, crf: int, maxrate: int | Non
         size = dist.stat().st_size
         seconds = frames / FPS
         gops = gop_sizes(dist, codec)
-        # VMAF + PSNR + SSIM(フレームごとの値から平均と 5 パーセンタイルを出す)
+        # VMAF + PSNR + SSIM(フレームごとの値から平均と 5 パーセンタイルを出す)。
+        # 両方の pts をフレーム番号で振り直す(参照の MKV は 1 ms 単位なので 66.67 ms と 67 ms がずれ、
+        # framesync が 1 つ前の参照フレームと比べてしまう)
         log = Path(td) / "vmaf.json"
         fmt = "hevc" if codec == "h265" else "h264"
         run(["ffmpeg", "-hide_banner", "-r", str(FPS), "-f", fmt, "-i", str(dist), "-i", str(ref), "-lavfi",
-             "[0:v]setpts=PTS-STARTPTS[d];[1:v]setpts=PTS-STARTPTS[r];"
+             f"[0:v]setpts=N/({FPS}*TB)[d];[1:v]setpts=N/({FPS}*TB)[r];"
              f"[d][r]libvmaf=n_threads={threads}:log_fmt=json:log_path={log}:"
              "feature=name=psnr|name=float_ssim", "-f", "null", "-"])
         doc = json.loads(log.read_text())

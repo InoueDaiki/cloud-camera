@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from .config import CameraConfig, EmulatorConfig, StreamSettings
+from .config import CameraConfig, EmulatorConfig, StreamSettings, normalize_codec
 from .ptz import PtzController
 from .ptz_service import PtzServiceMixin, ptz_capabilities_xml, ptz_configuration_xml
 from .soap import (
@@ -217,17 +217,26 @@ class CameraServices(PtzServiceMixin):
         )
 
     def _apply_encoder(self, which: str, conf_el, *, media2: bool) -> None:
-        """SetVideoEncoderConfiguration の共通処理。解像度とコーデックは固定(変えようとしたら Fault)。"""
+        """SetVideoEncoderConfiguration の共通処理。解像度は固定(変えようとしたら Fault)。
+        コーデック(Encoding)は main だけ H265 / H264 を切り替えられる(sub は H264 固定)。"""
         s = self._stream(which)
         width = child_text(conf_el, "Resolution", "Width")
         height = child_text(conf_el, "Resolution", "Height")
         if width and height and (int(width), int(height)) != (s.width, s.height):
             raise invalid_arg("ConfigModify", "Resolution is fixed on this device")
-        encoding = child_text(conf_el, "Encoding")
-        if encoding and encoding.upper() != s.codec:
-            raise invalid_arg("ConfigModify", f"Encoding is fixed to {s.codec} for this configuration")
-
         new = StreamSettings(**vars(s))
+        encoding = child_text(conf_el, "Encoding")
+        if encoding:
+            try:
+                codec = normalize_codec(encoding)
+            except ValueError:
+                raise invalid_arg("ConfigModify", f"Unsupported encoding: {encoding}") from None
+            if codec != s.codec:
+                # main は H.265 / H.264 を実行中に切り替えられる(FFmpeg を再起動する)。sub は H.264 固定
+                if which != "main":
+                    raise invalid_arg("ConfigModify", f"Encoding is fixed to {s.codec} for this configuration")
+                new.codec = codec
+
         bitrate = child_text(conf_el, "RateControl", "BitrateLimit")
         if bitrate:
             new.bitrate_kbps = int(float(bitrate))
@@ -620,19 +629,22 @@ class CameraServices(PtzServiceMixin):
 
     def m2_GetVideoEncoderConfigurationOptions(self, req, ctx):
         out = []
+        fps_list = " ".join(str(f) for f in FPS_SUPPORTED)
         for w in self._m2_targets(req):
             s = self._stream(w)
-            profile = "Main" if s.codec == "H265" else "High"
-            fps_list = " ".join(str(f) for f in FPS_SUPPORTED)
-            out.append(
-                f'<tr2:Options GovLengthRange="{GOV_RANGE[0]} {GOV_RANGE[1]}" FrameRatesSupported="{fps_list}" '
-                f'ProfilesSupported="{profile}" ConstantBitRateSupported="false" GuaranteedFrameRateSupported="false">'
-                f"<tt:Encoding>{s.codec}</tt:Encoding>"
-                f"<tt:QualityRange><tt:Min>{QUALITY_RANGE[0]}</tt:Min><tt:Max>{QUALITY_RANGE[1]}</tt:Max></tt:QualityRange>"
-                f"<tt:ResolutionsAvailable><tt:Width>{s.width}</tt:Width><tt:Height>{s.height}</tt:Height></tt:ResolutionsAvailable>"
-                f"<tt:BitrateRange><tt:Min>{BITRATE_RANGE[0]}</tt:Min><tt:Max>{BITRATE_RANGE[1]}</tt:Max></tt:BitrateRange>"
-                "</tr2:Options>"
-            )
+            # main は H.265 / H.264 のどちらにもできる(今のコーデックを先に)。sub は H.264 だけ
+            codecs = [s.codec, *(c for c in ("H265", "H264") if c != s.codec)] if w == "main" else [s.codec]
+            for codec in codecs:
+                profile = "Main" if codec == "H265" else "High"
+                out.append(
+                    f'<tr2:Options GovLengthRange="{GOV_RANGE[0]} {GOV_RANGE[1]}" FrameRatesSupported="{fps_list}" '
+                    f'ProfilesSupported="{profile}" ConstantBitRateSupported="false" GuaranteedFrameRateSupported="false">'
+                    f"<tt:Encoding>{codec}</tt:Encoding>"
+                    f"<tt:QualityRange><tt:Min>{QUALITY_RANGE[0]}</tt:Min><tt:Max>{QUALITY_RANGE[1]}</tt:Max></tt:QualityRange>"
+                    f"<tt:ResolutionsAvailable><tt:Width>{s.width}</tt:Width><tt:Height>{s.height}</tt:Height></tt:ResolutionsAvailable>"
+                    f"<tt:BitrateRange><tt:Min>{BITRATE_RANGE[0]}</tt:Min><tt:Max>{BITRATE_RANGE[1]}</tt:Max></tt:BitrateRange>"
+                    "</tr2:Options>"
+                )
         return f"<tr2:GetVideoEncoderConfigurationOptionsResponse>{''.join(out)}</tr2:GetVideoEncoderConfigurationOptionsResponse>"
 
     def m2_SetVideoEncoderConfiguration(self, req, ctx):

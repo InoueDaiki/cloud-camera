@@ -41,7 +41,12 @@ export interface Camera {
   streaming: boolean;
   /** 配信の指示(desired)。なければ reported と同じ */
   desired_streaming: boolean;
+  /** 実際に配信している映像形式(reported、"H265" / "H264" など) */
   codec: string | null;
+  /** 指示した映像形式(desired の codec)。なければ null(エッジの既定 = H.265) */
+  desired_codec: string | null;
+  /** 指示した形式に切り替えられなかった理由(reported の codec_error) */
+  codec_error: string | null;
   resolution: string | null;
   error: string | null;
   /** PTZ に対応しているか(シャドウの reported.ptz.supported) */

@@ -169,7 +169,7 @@ def test_pagination_full_day(ddb, kvs_stub, monkeypatch):
     proj = calls[0]["ProjectionExpression"]
     names = calls[0]["ExpressionAttributeNames"]
     used = {names.get(p.split(".")[0].strip(), p.strip()) for p in proj.split(",")}
-    assert used == {"sk", "video_status", "segments", "files"}
+    assert used == {"sk", "video_status", "segments", "files", "codecs"}
     assert "pad" not in json.dumps(names)
 
 

@@ -59,6 +59,8 @@ export function normalizeCamera(raw: CameraRaw): Camera {
     streaming,
     desired_streaming: typeof des?.streaming === 'boolean' ? des.streaming : streaming,
     codec: str(rep?.codec),
+    desired_codec: str(des?.codec),
+    codec_error: str(rep?.codec_error),
     resolution: str(rep?.resolution),
     error: str(rep?.error),
     ptz_supported: rep?.ptz?.supported === true,
@@ -78,6 +80,13 @@ export const api = {
     request<unknown>(`/cameras/${encodeURIComponent(cameraId)}/streaming`, {
       method: 'PUT',
       body: JSON.stringify({ streaming }),
+    }),
+
+  /** 映像形式の切り替え(シャドウの desired に書く。エッジがカメラを切り替えて配信をつなぎ直す) */
+  setCodec: (cameraId: string, codec: 'H265' | 'H264') =>
+    request<unknown>(`/cameras/${encodeURIComponent(cameraId)}/codec`, {
+      method: 'PUT',
+      body: JSON.stringify({ codec }),
     }),
 
   timeline: (cameraId: string, fromMs: number, toMs: number) =>

@@ -29,6 +29,7 @@ import {
 } from '@tabler/icons-react';
 import { api } from '../api/client';
 import type { Camera } from '../api/types';
+import { CameraSettingsButton } from '../cameras/CameraSettings';
 import { mayBeHevc } from '../lib/codec';
 import { LIVE_THRESHOLD_MS, SOURCE_LABEL } from '../lib/playbackSource';
 import {
@@ -261,6 +262,7 @@ export function Player({ pb, camera, now }: Props) {
               </ActionIcon>
             </Tooltip>
           )}
+          {camera && <CameraSettingsButton camera={camera} />}
         </Group>
 
         <Group gap="xs" wrap="nowrap">

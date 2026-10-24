@@ -106,6 +106,30 @@ def test_clip_uses_segments_for_gaps(aws):
     assert [int(ts.timestamp() * 1000) - BASE for ts, _ in b.frames] == [0, 1000, 30_000, 31_000]
 
 
+def test_clip_sections_after_codec_switch(aws):
+    """区間の途中で H.265 → H.264 に変わった区間(hls.sections)は、部分ごとの clip をデコードする(docs/codec.md)。"""
+    fs, table, s3, calls = aws
+    a, b = make_fmp4(2), make_fmp4(2, codec="h264")
+    secs = []
+    for name, data in (("clip.mp4", a), ("clip.1.mp4", b)):
+        offs = moof_offsets(data)
+        ends = offs[1:] + [len(data)]
+        key = KEY.replace("clip.mp4", name)
+        s3.put_object(Bucket=MEDIA, Key=key, Body=data)
+        secs.append({"clip": key, "init_length": offs[0], "parts": [[o, e - o, 1000] for o, e in zip(offs, ends)]})
+    table.put_item(Item={
+        "camera_id": CAM, "sk": SK, "video_status": "DONE",
+        "files": {"clip": KEY, "clips": [s["clip"] for s in secs]},
+        "hls": {"init_length": secs[0]["init_length"], "parts": secs[0]["parts"], "sections": secs},
+        "segments": [[BASE, BASE + 2000], [BASE + 10_000, BASE + 12_000]],
+    })
+    r = fs.clipfile(CAM, T0, T0 + timedelta(minutes=1), now=now_after(60))
+    assert [int(ts.timestamp() * 1000) - BASE for ts, _ in r.frames] == [0, 1000, 10_000, 11_000]
+    assert r.stats["sections"] == 2 and r.stats["clip_bytes"] == len(a) + len(b)
+    assert abs(float(np.asarray(r.frames[3][1])[:, 400:].mean()) - level(1)) < 10
+    assert calls == []
+
+
 def test_clip_height_from_env(aws, monkeypatch):
     fs, table, s3, _ = aws
     monkeypatch.setenv("DETECT_INPUT_WIDTH", "416")

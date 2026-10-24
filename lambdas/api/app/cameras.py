@@ -1,4 +1,4 @@
-"""GET /api/cameras と PUT /api/cameras/{id}/streaming(IoT のクラシックシャドウ)。"""
+"""GET /api/cameras と PUT /api/cameras/{id}/streaming、/codec(IoT のクラシックシャドウ)。"""
 
 from __future__ import annotations
 
@@ -91,6 +91,32 @@ def list_cameras(cfg: Config) -> dict:
             "detect_processed_until": iso(c["DETECT"]) if c.get("DETECT") else None,
         })
     return {"cameras": out}
+
+
+CODECS = ("H265", "H264")
+
+
+def _update_desired(cfg: Config, camera_id: str, fields: dict) -> dict:
+    gw = cfg.cameras.get(camera_id)
+    if not gw:
+        raise not_found(f"ゲートウェイが設定されていないカメラです: {camera_id}", "CAMERA_NOT_FOUND")
+    payload = {"state": {"desired": {"cameras": {camera_id: fields}}}}
+    resp = aws.iot_data(cfg.iot_data_endpoint).update_thing_shadow(
+        thingName=cfg.thing_name(gw), payload=json.dumps(payload).encode())
+    return json.loads(resp["payload"].read())
+
+
+def set_codec(cfg: Config, camera_id: str, body: object) -> dict:
+    """映像形式をシャドウの desired.cameras.{id}.codec に書く。エッジがカメラのエンコーダーを切り替え(ONVIF)、
+    パイプラインを組み直して reported.codec に実際の形式を返す(docs/codec.md)。"""
+    codec = body.get("codec") if isinstance(body, dict) else None
+    if isinstance(codec, str):
+        codec = codec.strip().upper().replace(".", "")
+        codec = {"HEVC": "H265", "AVC": "H264"}.get(codec, codec)
+    if codec not in CODECS:
+        raise bad_request('ボディは {"codec": "H265"|"H264"} にしてください')
+    result = _update_desired(cfg, camera_id, {"codec": codec})
+    return {"camera_id": camera_id, "codec": codec, "version": result.get("version")}
 
 
 def set_streaming(cfg: Config, camera_id: str, body: object) -> dict:

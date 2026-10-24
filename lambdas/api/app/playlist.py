@@ -3,6 +3,10 @@
 区間の件の `hls`(init_length と parts)から、範囲内の DONE 区間を連結した HLS(fMP4)を組む。
 区間ごとに clip.mp4 が別ファイルなので、区間の頭で EXT-X-DISCONTINUITY と EXT-X-MAP を切り替え、
 EXT-X-PROGRAM-DATE-TIME で実時刻を示す。hls.js と Safari の両方で読める形にしている。
+
+区間の途中でコーデック(H.265 / H.264)が変わった区間は `hls.sections` に部分ごと(clip.mp4、clip.1.mp4 …)に
+入っているので、部分ごとに EXT-X-DISCONTINUITY と EXT-X-MAP を切り替える。メディアプレイリストなので CODECS 属性はない
+(プレーヤーは各 EXT-X-MAP の init からコーデックを読む。docs/codec.md)。
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ def build(cfg: Config, camera_id: str, query: dict[str, str]) -> str:
         raise bad_request(f"範囲は {int(MAX_RANGE.total_seconds() // 60)} 分以内にしてください", "RANGE_TOO_LARGE")
 
     items = state.query_minutes(cfg, camera_id, floor_minute(start), ceil_minute(end),
-                                ["video_status", "segments", "files.clip", "hls"])
+                                ["video_status", "segments", "files.clip", "hls", "codecs"])
     sections = []
     for item in items:
         if item.get("video_status") != "DONE":
@@ -46,12 +50,17 @@ def build(cfg: Config, camera_id: str, query: dict[str, str]) -> str:
         segs = item.get("segments") or []
         # 最初の断片の実時刻。segments があればその開始、なければ区間の開始
         first = from_ms(int(segs[0][0])) if segs else minute
-        sections.append({
-            "uri": cfg.media_url(key),
-            "init_length": init_length,
-            "parts": [(int(o), int(l), int(d)) for o, l, d in parts],
-            "pdt": first,
-        })
+        codecs = item.get("codecs") or []
+        subs = hls.get("sections") or [{"clip": key, "init_length": init_length, "parts": parts,
+                                        "codec": codecs[0] if codecs else None}]
+        for i, sub in enumerate(subs):
+            sections.append({
+                "uri": cfg.media_url(sub["clip"]),
+                "init_length": int(sub["init_length"]),
+                "parts": [(int(o), int(l), int(d)) for o, l, d in sub["parts"]],
+                "pdt": first if i == 0 or not sub.get("start_ms") else from_ms(int(sub["start_ms"])),
+                "codec": sub.get("codec") or None,
+            })
     if not sections:
         raise not_found("範囲内に S3 へ退避済みの録画がありません", "NO_RECORDING")
     return render(sections)

@@ -146,6 +146,7 @@ def clipfile(camera_id: str, start: datetime, end: datetime, *, table=None, s3=N
     - `EMPTY`: 録画なし → 空(GetImages も呼ばない)
     - `FAILED`: 動画の退避に失敗した → GetImages(予備の経路。費用は失敗した区間の分だけ)
     - `DONE`: S3 の `files.clip` を GET し、`hls.parts` と `segments` から各断片の時刻を求めてデコードする。
+      区間の途中でコーデックが変わった区間(`hls.sections` がある)は、部分ごとの clip を GET してデコードする。
       デコードに失敗したら GetImages で取り直す
 
     フレームの時刻は、その秒の枠に入るキーフレームの実際の時刻(プロデューサー時刻)。GetImages(指定した時刻の直後のフレーム)
@@ -171,25 +172,44 @@ def clipfile(camera_id: str, start: datetime, end: datetime, *, table=None, s3=N
     hls = item.get("hls") or {}
     if not key or not hls.get("parts"):
         return _fallback(camera_id, start, end, "clip_missing")
+    # 部分(コーデックが変わった区間は 2 つ以上)。[(clip のキー, parts)]
+    sections = [(sec["clip"], sec["parts"]) for sec in hls.get("sections") or []] or [(key, hls["parts"])]
 
     bucket = os.environ["MEDIA_BUCKET"]
     t1 = time.perf_counter()
-    body = (s3 or _s3_client()).get_object(Bucket=bucket, Key=key)["Body"].read()
+    bodies = [(s3 or _s3_client()).get_object(Bucket=bucket, Key=k)["Body"].read() for k, _ in sections]
     get_ms = (time.perf_counter() - t1) * 1000
     width = _input_width()
     h_env = os.environ.get("DETECT_IMAGE_HEIGHT")
+    decoded = []
+    st: dict = {}
     try:
-        anchors = frames.anchors_from_hls(hls["parts"], item.get("segments") or [])
-        r = frames.decode_keyframes(body, start_ms=epoch_ms(start), end_ms=epoch_ms(end), anchors=anchors,
-                                    sizes={"detect": (width, int(h_env) if h_env else None)})
+        # 各断片の時刻は、全部の部分の parts を順につないで segments に当てはめて求め、部分ごとに分け直す
+        all_parts = [p for _, parts in sections for p in parts]
+        times = [ms for _, ms in frames.anchors_from_hls(all_parts, item.get("segments") or [])]
+        i = 0
+        for body, (_, parts) in zip(bodies, sections):
+            anchors = [(int(p[0]), times[i + j]) for j, p in enumerate(parts)]
+            i += len(parts)
+            r = frames.decode_keyframes(body, start_ms=epoch_ms(start), end_ms=epoch_ms(end), anchors=anchors,
+                                        sizes={"detect": (width, int(h_env) if h_env else None)})
+            decoded += r.frames
+            for k, v in r.stats.items():
+                num = isinstance(v, (int, float)) and not isinstance(v, bool)
+                st[k] = st.get(k, 0) + v if num else v
     except Exception as e:  # noqa: BLE001 - 壊れた clip は GetImages で取り直す
         return _fallback(camera_id, start, end, "decode_error", error=f"{type(e).__name__}: {e}"[:300])
-    batch = [(from_epoch_ms(f.ts_ms), f.images["detect"]) for f in r.frames]
-    st = r.stats
+    # 同じ枠(秒)は先の部分を優先し、時刻順にする
+    by_slot: dict = {}
+    for f in decoded:
+        by_slot.setdefault(f.slot, f)
+    frames_sorted = sorted(by_slot.values(), key=lambda f: f.ts_ms)
+    batch = [(from_epoch_ms(f.ts_ms), f.images["detect"]) for f in frames_sorted]
     return FrameBatch(batch, {
         "source": "clip",
         "video_status": status,
-        "clip_bytes": len(body),
+        "sections": len(sections),
+        "clip_bytes": sum(len(b) for b in bodies),
         "get_item_ms": round((t1 - t0) * 1000, 1),
         "s3_get_ms": round(get_ms, 1),
         "decode_ms": st.get("decode_ms"),
@@ -198,7 +218,7 @@ def clipfile(camera_id: str, start: datetime, end: datetime, *, table=None, s3=N
         "keyframes": st.get("keyframes"),
         "decoded": st.get("decoded"),
         "decode_lost": st.get("lost"),
-        "image_size": list(r.frames[0].images["detect"].size) if r.frames else None,
+        "image_size": list(frames_sorted[0].images["detect"].size) if frames_sorted else None,
     })
 
 

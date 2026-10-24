@@ -72,6 +72,7 @@ class StreamInfo:
     height: int
     media_version: int  # 2 = Media2, 1 = Media
     profiles: list[Profile] = field(default_factory=list)
+    codec_error: str | None = None  # desired の codec に切り替えられなかった理由
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -159,6 +160,7 @@ class OnvifClient:
         self.timeout = timeout
         self.clock_offset = dt.timedelta(0)  # カメラの時刻 − 自分の時刻
         self.services: dict[str, str] = {}
+        self.codec_switch_settle_s = 3.0  # コーデックを切り替えたあと RTSP につなぐまで待つ秒数
 
     # --- 低レベル --------------------------------------------------------
     def call(self, url: str, body: str, auth: bool = True, action: str = "") -> ET.Element:
@@ -262,15 +264,73 @@ class OnvifClient:
             raise OnvifError("GetStreamUri の応答に Uri がない")
         return _rewrite_host(uri, self.device_url)
 
-    def resolve(self, profile_token: str | None = None, prefer_codec: str = "H265") -> StreamInfo:
-        """プロファイルを選び(指定がなければ prefer_codec、既定 H.265 で最大解像度)、RTSP URL を返す。"""
+    def set_encoder_codec(self, profile_token: str, codec: str) -> bool:
+        """Media2 の SetVideoEncoderConfiguration で、プロファイルのエンコーダーの Encoding を codec にする。
+
+        今の構成を GetVideoEncoderConfigurations で取り、Encoding と Profile 属性(H.265 は Main、H.264 は High)
+        だけを変えて送り返す。変えたら True、すでに codec なら False。カメラが拒否したら OnvifError。
+        """
+        codec = normalize_codec(codec)
+        if not self.services:
+            self.get_services()
+        if MEDIA2_NS not in self.services:
+            raise OnvifError("Media2 がないのでコーデックを変えられない")
+        body = self.call(self.services[MEDIA2_NS],
+                         "<tr2:GetVideoEncoderConfigurations>"
+                         f"<tr2:ProfileToken>{_xml_escape(profile_token)}</tr2:ProfileToken>"
+                         "</tr2:GetVideoEncoderConfigurations>")
+        conf = _find_local(body, "Configurations")
+        if conf is None:
+            raise OnvifError(f"プロファイル {profile_token} にエンコーダーの構成がない")
+        enc = _find_local(conf, "Encoding")
+        if enc is None:
+            raise OnvifError("エンコーダーの構成に Encoding がない")
+        if _norm_encoding(enc.text or "") == codec:
+            return False
+        enc.text = codec
+        conf.set("Profile", "Main" if codec == "H265" else "High")
+        conf.tag = f"{{{MEDIA2_NS}}}Configuration"
+        xml = ET.tostring(conf, encoding="unicode")
+        self.call(self.services[MEDIA2_NS],
+                  f"<tr2:SetVideoEncoderConfiguration>{xml}</tr2:SetVideoEncoderConfiguration>")
+        log.info("ONVIF: %s のエンコーダーを %s に変更", profile_token, codec)
+        return True
+
+    def resolve(self, profile_token: str | None = None, prefer_codec: str = "H265",
+                want_codec: str | None = None) -> StreamInfo:
+        """プロファイルを選び(指定がなければ prefer_codec、既定 H.265 で最大解像度)、RTSP URL を返す。
+
+        want_codec(シャドウの desired の codec)を指定すると、カメラのエンコーダーをそのコーデックに切り替える:
+        対象のプロファイル(profile_token、なければ最大解像度)の Encoding を Media2 の SetVideoEncoderConfiguration で
+        変える。変えられなければ(Media2 がない、カメラが拒否した)want_codec のプロファイルを選び直し、
+        それもなければもう一方のまま(StreamInfo.codec_error に理由)。
+        """
         self.sync_clock()
         version, profiles = self.get_profiles()
+        codec_error = None
+        if want_codec:
+            want_codec = normalize_codec(want_codec)
+            prefer_codec = want_codec
+            video = [p for p in profiles if p.encoding in CODECS]
+            target = (next((p for p in profiles if p.token == profile_token), None) if profile_token
+                      else max(video, key=lambda p: p.width * p.height, default=None))
+            if target is not None and target.encoding != want_codec:
+                try:
+                    if self.set_encoder_codec(target.token, want_codec):
+                        # カメラはエンコーダーを作り直す(エミュレーターは FFmpeg の再起動で約 2 秒)。すぐ RTSP に
+                        # つなぐと古いストリームや準備中の応答に当たるので少し待つ
+                        time.sleep(self.codec_switch_settle_s)
+                    version, profiles = self.get_profiles()
+                except OnvifError as e:
+                    codec_error = f"カメラのコーデックを {want_codec} に変えられない: {e}"
+                    log.warning("%s", codec_error)
         prof = select_profile(profiles, profile_token, prefer_codec)
+        if want_codec and prof.encoding != want_codec and codec_error is None:
+            codec_error = f"{want_codec} のプロファイルがない({prof.encoding} で送る)"
         uri = self.get_stream_uri(version, prof.token)
         return StreamInfo(rtsp_url=uri, profile_token=prof.token, codec=prof.encoding,
                           width=prof.width, height=prof.height, media_version=version,
-                          profiles=profiles)
+                          profiles=profiles, codec_error=codec_error)
 
 
 def _fault_reason(raw: bytes) -> str:

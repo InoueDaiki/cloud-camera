@@ -8,7 +8,8 @@ from PIL import Image as PILImage
 from PIL import ImageStat
 
 import archiver
-from archiver import Archiver, Clip, build_clip, build_playlist, build_sprite, parse_master_playlist, parse_media_playlist
+from archiver import (Archiver, Clip, build_clip, build_playlist, build_sprite, codec_of_init, parse_master_playlist,
+                      parse_media_playlist)
 from common.tests.media import moof_offsets
 from common import kvs
 from common.timeutil import epoch_ms
@@ -256,3 +257,103 @@ def test_process_minute_clip_failure_raises(s3):
     with pytest.raises(archiver.ArchiveError):
         arch.process_minute("cam-001", T(10, 20), T(10, 21))
     assert s3.list_objects_v2(Bucket=BUCKET).get("KeyCount") == 0
+
+
+# ---------------------------------------------------------------- 区間の途中でコーデックが変わる(docs/codec.md)
+
+# KVS の HLS は、コーデックプライベートデータが変わったところで新しい EXT-X-MAP を出す(実測、2026-10-24)
+MEDIA_SWITCH = """#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-TARGETDURATION:2
+#EXT-X-MAP:URI="getMP4InitFragment.mp4?SessionToken=abc&TrackNumber=1"
+#EXTINF:1.000,
+getMP4MediaFragment.mp4?FragmentNumber=100&SessionToken=abc
+#EXTINF:1.000,
+getMP4MediaFragment.mp4?FragmentNumber=101&SessionToken=abc
+#EXT-X-MAP:URI="getMP4InitFragment.mp4?SessionToken=abc&TrackNumber=1&SequenceNumber=3"
+#EXTINF:1.000,
+getMP4MediaFragment.mp4?FragmentNumber=200&SessionToken=abc
+#EXT-X-ENDLIST
+"""
+
+
+def test_parse_media_playlist_sections():
+    m = parse_media_playlist(MEDIA_SWITCH, BASE + "m.m3u8")
+    assert [n for n, _ in m.fragments] == ["100", "101", "200"]
+    assert len(m.sections) == 2
+    assert m.sections[0][0].endswith("TrackNumber=1") and m.sections[1][0].endswith("SequenceNumber=3")
+    assert [[n for n, _ in fr] for _, fr in m.sections] == [["100", "101"], ["200"]]
+    assert m.init_url == m.sections[0][0]
+
+
+def test_codec_of_init():
+    pytest.importorskip("av")
+    from common.tests.media import make_fmp4
+
+    for codec, want in (("h265", "H265"), ("h264", "H264")):
+        data = make_fmp4(1, codec=codec)
+        assert codec_of_init(data[: moof_offsets(data)[0]]) == want
+    assert codec_of_init(b"no init") is None
+
+
+def _two_clips():
+    a = Clip(data=b"I" * 8 + b"F" * 8, init_length=8, parts=[[8, 4, 1000], [12, 4, 1000]],
+             fragments=[frag(1, T(10, 20, 0)), frag(2, T(10, 20, 1))], codec="H265")
+    b = Clip(data=b"J" * 6 + b"G" * 4, init_length=6, parts=[[6, 4, 1000]], fragments=[frag(3, T(10, 20, 5))],
+             codec="H264")
+    return a, b
+
+
+def test_build_playlist_switches_map():
+    a, b = _two_clips()
+    lines = build_playlist([a, b], ["clip.mp4", "clip.1.mp4"]).splitlines()
+    maps = [l for l in lines if l.startswith("#EXT-X-MAP")]
+    assert maps == ['#EXT-X-MAP:URI="clip.mp4",BYTERANGE="8@0"', '#EXT-X-MAP:URI="clip.1.mp4",BYTERANGE="6@0"']
+    i = lines.index(maps[1])
+    assert lines[i - 1] == "#EXT-X-DISCONTINUITY"
+    assert lines[i + 1] == "#EXT-X-PROGRAM-DATE-TIME:2026-10-24T10:20:05.000Z"
+    assert lines.count("clip.mp4") == 2 and lines.count("clip.1.mp4") == 1
+
+
+def test_process_minute_with_codec_switch(s3):
+    a, b = _two_clips()
+    fk = FakeKvs([frag(1, T(10, 20, 0)), frag(2, T(10, 20, 1)), frag(3, T(10, 20, 5))])
+    fk.clip_builder = lambda *args: [a, b]
+    seen = []
+
+    def sprite(clips, start, end):
+        seen.append(clips)
+        return archiver.Sprite(b"JPEG", 2, {})
+
+    fk.sprite_builder = sprite
+    r = make(s3, fk).process_minute("cam-001", T(10, 20), T(10, 21))
+    at = r.attributes
+    p = "cam-001/2026/10/24/10/20/"
+    assert at["files"]["clip"] == p + "clip.mp4"
+    assert at["files"]["clips"] == [p + "clip.mp4", p + "clip.1.mp4"]
+    assert at["codecs"] == ["H265", "H264"]
+    assert at["hls"]["parts"] == a.parts  # 1 つ目の部分(以前の形)
+    secs = at["hls"]["sections"]
+    assert [s["clip"] for s in secs] == at["files"]["clips"]
+    assert [s["codec"] for s in secs] == ["H265", "H264"]
+    assert secs[1]["init_length"] == 6 and secs[1]["start_ms"] == frag(3, T(10, 20, 5)).producer_ms
+    assert at["fragment_count"] == 3 and at["bytes"] == 26
+    assert seen == [[a, b]]
+    keys = {o["Key"] for o in s3.list_objects_v2(Bucket=BUCKET)["Contents"]}
+    assert keys == {p + "clip.mp4", p + "clip.1.mp4", p + "index.m3u8", p + "sprite.jpg"}
+    assert s3.get_object(Bucket=BUCKET, Key=p + "clip.1.mp4")["Body"].read() == b.data
+
+
+def test_build_sprite_from_two_codecs():
+    """H.265 の部分と H.264 の部分のキーフレームを 1 枚のシートにまとめる。"""
+    pytest.importorskip("av")
+    from common.tests.media import BASE as B
+    from common.tests.media import START, make_fmp4
+
+    h265 = _clip_from_fmp4(make_fmp4(2), [B, B + 1000])
+    h264 = _clip_from_fmp4(make_fmp4(2, codec="h264"), [B + 10_000, B + 11_000])
+    start = datetime.fromtimestamp(START / 1000, timezone.utc)
+    sp = build_sprite([h265, h264], start, start + timedelta(minutes=1))
+    assert sp.error is None and sp.frames == 4
+    assert PILImage.open(io.BytesIO(sp.jpeg)).size == (1600, 540)

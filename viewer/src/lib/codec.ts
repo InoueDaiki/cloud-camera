@@ -61,3 +61,23 @@ export function normalizeCodec(codec: string | null | undefined): VideoCodec | n
 export function mayBeHevc(codec: string | null | undefined): boolean {
   return normalizeCodec(codec) !== 'H.264';
 }
+
+/**
+ * 同じ画質(VMAF)で H.264 は H.265 の約何倍のビットレートになるか(docs/codec.md の測定)。
+ * 帯域、KVS の取り込みと保存、S3 の保存はビットレートに比例する。
+ */
+export const H264_BITRATE_RATIO = 1.5;
+
+interface CodecState {
+  codec: string | null;
+  desired_codec: string | null;
+  desired_streaming: boolean;
+  online: boolean | null;
+}
+
+/** 指示した映像形式と実際の形式が違う(エッジが切り替え中)。配信を止めている・オフラインのときは false */
+export function isCodecSwitching(c: CodecState): boolean {
+  const want = normalizeCodec(c.desired_codec);
+  if (!want || !c.desired_streaming || c.online === false) return false;
+  return normalizeCodec(c.codec) !== want;
+}

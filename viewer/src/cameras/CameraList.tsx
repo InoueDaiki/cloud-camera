@@ -5,7 +5,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { IconAlertCircle } from '@tabler/icons-react';
 import { api } from '../api/client';
 import type { Camera, CamerasResponse } from '../api/types';
-import { normalizeCodec } from '../lib/codec';
+import { isCodecSwitching, normalizeCodec } from '../lib/codec';
 import { formatDuration, formatHm, parseTime } from '../lib/time';
 import classes from './CameraList.module.css';
 
@@ -120,6 +120,13 @@ function CameraItem({ camera: c, selected, now, onSelect }: { camera: Camera; se
           <Badge color="gray" variant="outline">
             停止
           </Badge>
+        )}
+        {isCodecSwitching(c) && (
+          <Tooltip label={`映像形式を ${normalizeCodec(c.desired_codec)} に切り替えています`}>
+            <Badge color="blue" variant="light">
+              形式を切替中…
+            </Badge>
+          </Tooltip>
         )}
         {lag !== null && (
           <Tooltip label={`S3 への退避は ${formatHm(processed!)} まで完了`}>

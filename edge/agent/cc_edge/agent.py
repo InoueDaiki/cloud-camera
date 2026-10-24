@@ -82,8 +82,10 @@ class CameraWorker:
             if self.info is None or attempt % 3 == 0:
                 cli = onvif.OnvifClient(c["onvif_url"], c.get("username", ""), c.get("password", ""))
                 try:
+                    # desired の codec があれば、カメラのエンコーダーをそのコーデックに切り替えてから選ぶ
                     self.info = await asyncio.to_thread(cli.resolve, c.get("profile_token"),
-                                                        c.get("prefer_codec") or self.cfg.prefer_codec)
+                                                        c.get("prefer_codec") or self.cfg.prefer_codec,
+                                                        c.get("codec"))
                     self.resolve_error = None
                     log.info("[%s] ONVIF: profile=%s codec=%s %dx%d %s", self.camera_id,
                              self.info.profile_token, self.info.codec, self.info.width,
@@ -137,7 +139,9 @@ class CameraWorker:
         return {
             "streaming": self.sup.running,
             "rtsp_url": info.rtsp_url if info else None,
-            "codec": (caps.get("codec") or (info.codec if info else None)),
+            # 切り替えの直後に前のパイプラインの caps が残らないよう、今のパイプラインの設定を優先する
+            "codec": ((info.codec if info else None) or caps.get("codec")),
+            "codec_error": info.codec_error if info else None,
             "resolution": f"{w}x{h}" if w and h else None,
             "profile_token": info.profile_token if info else None,
             "error": err,

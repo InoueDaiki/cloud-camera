@@ -111,17 +111,40 @@ export function mockCameras(now: number): CameraRaw[] {
         name: c.name,
         streaming: off === null && want,
         rtsp_url: `rtsp://emulator:8554/cam${c.camera_id.slice(-1)}/main`,
-        codec: 'H.265',
+        codec: mockCodec(c.camera_id, now),
         resolution: '1920x1080',
         error: off === null ? null : 'ゲートウェイからの応答がありません(LWT 受信)',
         ptz: mockPtzState(c.camera_id, now),
       },
-      desired: { name: c.name, streaming: want, username: 'admin', password: '***', profile_token: null },
+      desired: {
+        name: c.name,
+        streaming: want,
+        username: 'admin',
+        password: '***',
+        profile_token: null,
+        ...(codecs.has(c.camera_id) ? { codec: codecs.get(c.camera_id)!.want } : {}),
+      },
       reported_at: iso(off ?? now - 12 * SECOND),
       video_processed_until: iso(processedUntil(c, now)),
       detect_processed_until: iso(processedUntil(c, now) - MINUTE),
     };
   });
+}
+
+// 映像形式の指示(desired の codec)。エッジの切り替えを模して、指示から 4 秒後に reported が変わる
+const codecs = new Map<string, { want: 'H265' | 'H264'; prev: string; since: number }>();
+const CODEC_SWITCH_MS = 4000;
+
+function mockCodec(cameraId: string, now: number): string {
+  const c = codecs.get(cameraId);
+  if (!c) return 'H265';
+  return now - c.since >= CODEC_SWITCH_MS ? c.want : c.prev;
+}
+
+export function setDesiredCodec(cameraId: string, codec: 'H265' | 'H264', now: number): boolean {
+  if (camIndex(cameraId) < 0) return false;
+  codecs.set(cameraId, { want: codec, prev: mockCodec(cameraId, now), since: now });
+  return true;
 }
 
 export function setDesiredStreaming(cameraId: string, streaming: boolean): boolean {

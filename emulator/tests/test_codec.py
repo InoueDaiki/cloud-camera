@@ -86,3 +86,42 @@ def test_onvif_default_main_is_h265_and_media1_hides_it():
     assert "<tt:Encoding>H265</tt:Encoding>" in profiles
     m1 = _call(svc, MEDIA1, "GetVideoEncoderConfigurations")
     assert m1.count("<tt:Encoding>H264</tt:Encoding>") == 1 and "VideoEncoder_Main" not in m1
+
+
+def _set_encoder(token: str, encoding: str, profile: str) -> str:
+    return (f'<x:Configuration token="{token}" GovLength="15" Profile="{profile}" '
+            'xmlns:tt="http://www.onvif.org/ver10/schema">'
+            f"<tt:Name>main</tt:Name><tt:UseCount>1</tt:UseCount><tt:Encoding>{encoding}</tt:Encoding>"
+            "<tt:Resolution><tt:Width>1280</tt:Width><tt:Height>720</tt:Height></tt:Resolution>"
+            '<tt:RateControl ConstantBitRate="false"><tt:FrameRateLimit>15</tt:FrameRateLimit>'
+            "<tt:BitrateLimit>1024</tt:BitrateLimit></tt:RateControl><tt:Quality>60</tt:Quality>"
+            "</x:Configuration><x:ForcePersistence>true</x:ForcePersistence>")
+
+
+def test_media2_switches_main_codec_at_runtime():
+    cfg = load_config(env={"EMULATOR_CAMERAS": "1", "EMULATOR_PTZ": "false"})
+    changed = []
+    svc = CameraServices(cfg, cfg.cameras[0], on_encoder_change=lambda cam, which: changed.append(which))
+    _call(svc, MEDIA2, "SetVideoEncoderConfiguration", _set_encoder("VideoEncoder_Main", "H264", "High"))
+    assert cfg.cameras[0].main.codec == "H264" and changed == ["main"]
+    confs = _call(svc, MEDIA2, "GetVideoEncoderConfigurations",
+                  "<x:ConfigurationToken>VideoEncoder_Main</x:ConfigurationToken>")
+    assert "<tt:Encoding>H264</tt:Encoding>" in confs
+    # 戻す
+    _call(svc, MEDIA2, "SetVideoEncoderConfiguration", _set_encoder("VideoEncoder_Main", "H265", "Main"))
+    assert cfg.cameras[0].main.codec == "H265" and changed == ["main", "main"]
+    # 同じなら再起動しない
+    _call(svc, MEDIA2, "SetVideoEncoderConfiguration", _set_encoder("VideoEncoder_Main", "H265", "Main"))
+    assert changed == ["main", "main"]
+
+
+def test_media2_rejects_sub_codec_change_and_unknown_encoding():
+    from onvif_emulator.soap import SoapFault
+
+    cfg = load_config(env={"EMULATOR_CAMERAS": "1", "EMULATOR_PTZ": "false"})
+    svc = CameraServices(cfg, cfg.cameras[0])
+    with pytest.raises(SoapFault):
+        _call(svc, MEDIA2, "SetVideoEncoderConfiguration", _set_encoder("VideoEncoder_Sub", "H265", "Main"))
+    with pytest.raises(SoapFault):
+        _call(svc, MEDIA2, "SetVideoEncoderConfiguration", _set_encoder("VideoEncoder_Main", "JPEG", "Main"))
+    assert cfg.cameras[0].sub.codec == "H264" and cfg.cameras[0].main.codec == "H265"

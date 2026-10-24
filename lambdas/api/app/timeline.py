@@ -56,7 +56,7 @@ def build(cfg: Config, camera_id: str, query: dict[str, str]) -> dict:
         q_start = floor_minute(start)
         q_end = min(ceil_minute(end), floor_minute(video_pu))
         items = state.query_minutes(cfg, camera_id, q_start, q_end,
-                                    ["video_status", "segments", "files.sprite"])
+                                    ["video_status", "segments", "files.sprite", "codecs"])
         for item in items:
             minute = parse_ts(item["sk"], "sk")
             status = item.get("video_status")
@@ -65,7 +65,11 @@ def build(cfg: Config, camera_id: str, query: dict[str, str]) -> dict:
                 s3_ranges.extend(_segments_of(item, minute))
                 sprite = (item.get("files") or {}).get("sprite") or _media_key(camera_id, minute, "sprite.jpg")
                 if m_ms + 60_000 > lo_ms and m_ms < hi_ms:
-                    minutes.append({"start": iso(minute), "sprite": cfg.media_url(sprite)})
+                    m = {"start": iso(minute), "sprite": cfg.media_url(sprite)}
+                    if item.get("codecs"):
+                        # 区間の映像形式(途中で切り替わった区間は 2 つ以上。["H265", "H264"])
+                        m["codecs"] = [c for c in item["codecs"] if c]
+                    minutes.append(m)
             elif status == "FAILED":
                 failed_ranges.append((m_ms, m_ms + 60_000))
         boundary_ms = to_ms(floor_minute(video_pu))

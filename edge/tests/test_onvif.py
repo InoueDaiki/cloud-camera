@@ -27,7 +27,7 @@ PROFILES = """
    <tt:Resolution><tt:Width>640</tt:Width><tt:Height>360</tt:Height></tt:Resolution></tr2:VideoEncoder>
  </tr2:Configurations></tr2:Profiles>
  <tr2:Profiles token="main" fixed="true"><tr2:Name>main</tr2:Name><tr2:Configurations>
-  <tr2:VideoEncoder token="ve1" GovLength="25"><tt:Encoding>H265</tt:Encoding>
+  <tr2:VideoEncoder token="ve1" GovLength="25"><tt:Encoding>{main}</tt:Encoding>
    <tt:Resolution><tt:Width>1920</tt:Width><tt:Height>1080</tt:Height></tt:Resolution>
    <tt:RateControl><tt:FrameRateLimit>25</tt:FrameRateLimit><tt:BitrateLimit>2048</tt:BitrateLimit></tt:RateControl>
   </tr2:VideoEncoder></tr2:Configurations></tr2:Profiles>
@@ -37,6 +37,9 @@ PROFILES = """
 class FakeCamera(BaseHTTPRequestHandler):
     user, password = "admin", "admin"
     calls: list[str] = []
+    main_encoding = "H265"  # SetVideoEncoderConfiguration で変わる
+    reject_set = False
+    last_set: ET.Element | None = None
 
     def log_message(self, *a):
         pass
@@ -77,7 +80,19 @@ class FakeCamera(BaseHTTPRequestHandler):
                         "<tds:XAddr>http://127.0.0.1:%d/onvif/media2</tds:XAddr></tds:Service>"
                         "</tds:GetServicesResponse>" % port)
         elif op == "GetProfiles":
-            resp = _env(PROFILES)
+            resp = _env(PROFILES.format(main=FakeCamera.main_encoding))
+        elif op == "GetVideoEncoderConfigurations":
+            resp = _env(f'<tr2:GetVideoEncoderConfigurationsResponse><tr2:Configurations token="ve1" GovLength="25" '
+                        f'Profile="Main"><tt:Name>main</tt:Name><tt:Encoding>{FakeCamera.main_encoding}</tt:Encoding>'
+                        "<tt:Resolution><tt:Width>1920</tt:Width><tt:Height>1080</tt:Height></tt:Resolution>"
+                        "</tr2:Configurations></tr2:GetVideoEncoderConfigurationsResponse>")
+        elif op == "SetVideoEncoderConfiguration":
+            if FakeCamera.reject_set:
+                return self._send(400, _env("<s:Fault><s:Reason><s:Text>ConfigModify</s:Text></s:Reason></s:Fault>"))
+            conf = list(list(body)[0])[0]
+            FakeCamera.last_set = conf
+            FakeCamera.main_encoding = [e.text for e in conf.iter() if e.tag.endswith("Encoding")][0]
+            resp = _env("<tr2:SetVideoEncoderConfigurationResponse/>")
         elif op == "GetStreamUri":
             tok = [e.text for e in root.iter() if e.tag.endswith("ProfileToken")][0]
             resp = _env(f"<tr2:GetStreamUriResponse><tr2:Uri>rtsp://0.0.0.0:8554/cam1/{tok}</tr2:Uri></tr2:GetStreamUriResponse>")
@@ -99,6 +114,8 @@ def camera():
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
     FakeCamera.calls = []
+    FakeCamera.main_encoding = "H265"
+    FakeCamera.reject_set = False
     yield f"http://127.0.0.1:{srv.server_address[1]}/onvif/device_service"
     srv.shutdown()
 
@@ -151,6 +168,34 @@ def test_select_profile_prefer_h264():
 def test_resolve_prefer_h264(camera):
     info = onvif.OnvifClient(camera, "admin", "admin").resolve(prefer_codec="H264")
     assert info.codec == "H264" and info.rtsp_url.endswith("/sub")
+
+
+def _cli(url: str) -> onvif.OnvifClient:
+    c = onvif.OnvifClient(url, "admin", "admin")
+    c.codec_switch_settle_s = 0
+    return c
+
+
+def test_resolve_switches_camera_codec(camera):
+    info = _cli(camera).resolve(want_codec="H264")
+    # sub(H.264、低解像度)に逃げずに、main のエンコーダーを H.264 に変える
+    assert info.codec == "H264" and info.profile_token == "main" and info.codec_error is None
+    conf = FakeCamera.last_set
+    assert conf.tag.endswith("}Configuration") and conf.get("Profile") == "High" and conf.get("token") == "ve1"
+    assert "SetVideoEncoderConfiguration" in FakeCamera.calls
+    # 戻す。同じなら Set しない
+    info = _cli(camera).resolve(want_codec="H265")
+    assert info.codec == "H265" and FakeCamera.last_set.get("Profile") == "Main"
+    FakeCamera.calls = []
+    _cli(camera).resolve(want_codec="H265")
+    assert "SetVideoEncoderConfiguration" not in FakeCamera.calls
+
+
+def test_resolve_falls_back_to_other_profile_when_camera_rejects(camera):
+    FakeCamera.reject_set = True
+    info = _cli(camera).resolve(want_codec="H264")
+    assert info.codec == "H264" and info.profile_token == "sub"
+    assert "変えられない" in info.codec_error
 
 
 def test_prefer_codec_config():

@@ -3,6 +3,7 @@
 | メソッドとパス | 処理 |
 | GET  /api/cameras                      | カメラ一覧と状態 |
 | PUT  /api/cameras/{id}/streaming       | シャドウの desired を更新 |
+| PUT  /api/cameras/{id}/codec           | 映像形式(H265 / H264)をシャドウの desired に書く |
 | GET  /api/cameras/{id}/timeline        | 録画範囲(S3 と KVS の境界を隠す) |
 | GET  /api/cameras/{id}/vod.m3u8        | S3 退避済み区間を連結した HLS |
 | GET  /api/cameras/{id}/kvs-hls         | KVS の HLS セッション URL |
@@ -28,6 +29,7 @@ _CAM = r"(?P<id>[A-Za-z0-9_.\-]{1,64})"
 ROUTES = [
     ("GET", re.compile(r"^/api/cameras/?$"), "cameras"),
     ("PUT", re.compile(rf"^/api/cameras/{_CAM}/streaming$"), "streaming"),
+    ("PUT", re.compile(rf"^/api/cameras/{_CAM}/codec$"), "codec"),
     ("GET", re.compile(rf"^/api/cameras/{_CAM}/timeline$"), "timeline"),
     ("GET", re.compile(rf"^/api/cameras/{_CAM}/vod\.m3u8$"), "vod"),
     ("GET", re.compile(rf"^/api/cameras/{_CAM}/kvs-hls$"), "kvs_hls"),
@@ -60,6 +62,8 @@ def dispatch(req: Request) -> dict:
             return json_response(200, cameras.list_cameras(cfg))
         if name == "streaming":
             return json_response(200, cameras.set_streaming(cfg, cam, req.json()))
+        if name == "codec":
+            return json_response(200, cameras.set_codec(cfg, cam, req.json()))
         if name == "timeline":
             return json_response(200, timeline.build(cfg, cam, req.query))
         if name == "vod":

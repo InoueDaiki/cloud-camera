@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mayBeHevc, normalizeCodec } from './codec';
+import { isCodecSwitching, mayBeHevc, normalizeCodec } from './codec';
 
 describe('normalizeCodec', () => {
   it('シャドウの表記ゆれを揃える', () => {
@@ -12,6 +12,20 @@ describe('normalizeCodec', () => {
     expect(normalizeCodec('JPEG')).toBeNull();
     expect(normalizeCodec(null)).toBeNull();
     expect(normalizeCodec(undefined)).toBeNull();
+  });
+});
+
+describe('isCodecSwitching', () => {
+  const base = { codec: 'H265', desired_codec: 'H264', desired_streaming: true, online: true };
+  it('指示と実際が違えば切り替え中', () => {
+    expect(isCodecSwitching(base)).toBe(true);
+    expect(isCodecSwitching({ ...base, codec: 'H264' })).toBe(false);
+    expect(isCodecSwitching({ ...base, desired_codec: 'H.264', codec: 'h264' })).toBe(false);
+  });
+  it('指示がない・配信停止・オフラインなら切り替え中としない', () => {
+    expect(isCodecSwitching({ ...base, desired_codec: null })).toBe(false);
+    expect(isCodecSwitching({ ...base, desired_streaming: false })).toBe(false);
+    expect(isCodecSwitching({ ...base, online: false })).toBe(false);
   });
 });
 

@@ -7,6 +7,7 @@ import {
   mockPlaylist,
   mockSearch,
   mockTimeline,
+  setDesiredCodec,
   setDesiredStreaming,
 } from './data';
 import { mockPtzCommand, mockPtzState } from './ptz';
@@ -29,6 +30,18 @@ export const handlers = [
     if (typeof body.streaming !== 'boolean') return HttpResponse.json({ error: { code: 'BAD_REQUEST', message: 'streaming が必要です' } }, { status: 400 });
     if (!setDesiredStreaming(String(params.id), body.streaming)) return HttpResponse.json({ error: { code: 'CAMERA_NOT_FOUND', message: 'カメラがありません' } }, { status: 404 });
     return HttpResponse.json({ camera_id: params.id, streaming: body.streaming, version: 1 });
+  }),
+
+  http.put('/api/cameras/:id/codec', async ({ params, request }) => {
+    const body = (await request.json()) as { codec?: string };
+    await delay(300);
+    if (body.codec !== 'H265' && body.codec !== 'H264') {
+      return HttpResponse.json({ error: { code: 'BAD_REQUEST', message: 'codec は H265 か H264' } }, { status: 400 });
+    }
+    if (!setDesiredCodec(String(params.id), body.codec, Date.now())) {
+      return HttpResponse.json({ error: { code: 'CAMERA_NOT_FOUND', message: 'カメラがありません' } }, { status: 404 });
+    }
+    return HttpResponse.json({ camera_id: params.id, codec: body.codec, version: 1 });
   }),
 
   http.get('/api/cameras/:id/ptz', async ({ params }) => {
