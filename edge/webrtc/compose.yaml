@@ -16,7 +16,7 @@ services:
       context: ../../emulator
       target: base
     # 他の compose(リポジトリ直下など)と同じタグを上書きしないよう、別のタグにする。
-    # CC_EMULATOR_IMAGE で差し替えられる(docs/webrtc.md の「エミュレーターの 1 秒ごとのまとめ送り」を参照)
+    # CC_EMULATOR_IMAGE で別のイメージに差し替えられる(エミュレーターの改修前後の比較など)
     image: ${CC_EMULATOR_IMAGE:-cc-webrtc-emulator:dev}
     init: false
     environment:

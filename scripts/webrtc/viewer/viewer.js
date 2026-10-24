@@ -2,7 +2,8 @@
 // 1. API(試作では scripts/webrtc/serve.py)から署名付き WSS URL と ICE サーバーをもらう(AWS の認証情報はブラウザに置かない)
 // 2. JS SDK の SignalingClient に、署名済み URL を返すだけの requestSigner を渡して接続する
 // 3. 映像は受信だけ(recvonly)。コーデックは setCodecPreferences で選ぶ
-// URL の引数: ?camera=cam-001&codec=h264|h265|any&relay=1&autostart=1
+// 比較用に、KVS の HLS(LIVE)も同じページで再生できる(mode=hls。hls.js を使う)
+// URL の引数: ?camera=cam-001&mode=webrtc|hls&codec=h264|h265|any&relay=1&autostart=1
 'use strict';
 
 const $ = (id) => document.getElementById(id);
@@ -11,6 +12,7 @@ let pc = null;
 let signaling = null;
 let statsTimer = null;
 let prevInbound = null;
+let hls = null;
 
 // Playwright から読む計測値
 window.ccStats = { state: 'idle', log: [] };
@@ -44,8 +46,82 @@ function showH265Capability() {
   $('h265cap').textContent = h265.length ? 'このブラウザは H.265 を受信できる' : 'このブラウザは H.265 を受信できない';
 }
 
+// --- 映像の変化の検出(PTZ の操作が画面に出るまでの計測用) ------------------------------
+// テストパターンで毎フレーム動くもの(左上の焼き込み、右の数字、下の虹色の帯)を避け、
+// 左から中央の静止した領域(横 2〜62%、縦 30〜72%)を小さく縮小して比べる。
+// armChangeDetector() の時点のフレームを基準にし、基準との差が閾値を超えた最初のフレームの表示時刻を記録する。
+const det = { canvas: document.createElement('canvas'), base: null, armed: false };
+det.canvas.width = 64;
+det.canvas.height = 36;
+function frameSignature() {
+  const v = $('video');
+  if (!v.videoWidth) return null;
+  const ctx = det.canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(v, v.videoWidth * 0.02, v.videoHeight * 0.3, v.videoWidth * 0.6, v.videoHeight * 0.42, 0, 0, 64, 36);
+  return ctx.getImageData(0, 0, 64, 36).data;
+}
+function diff(a, b) {
+  let d = 0;
+  for (let i = 0; i < a.length; i += 4) d += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
+  return d / (a.length / 4) / 3;
+}
+function onFrame(now, meta) {
+  const v = $('video');
+  if (det.armed) {
+    const sig = frameSignature();
+    if (sig && !det.base) det.base = sig;
+    else if (sig) {
+      const d = diff(sig, det.base);
+      if (d > det.threshold) {
+        det.armed = false;
+        // expectedDisplayTime は合成器に渡る予定時刻(performance 時刻)。壁時計に直す
+        const shown = meta && meta.expectedDisplayTime ? Date.now() + (meta.expectedDisplayTime - performance.now()) : Date.now();
+        window.ccStats.change = { t_ms: Math.round(shown), diff: Math.round(d * 10) / 10 };
+      }
+    }
+  }
+  if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(onFrame);
+}
+window.armChangeDetector = (threshold = 6) => {
+  det.base = null;
+  det.threshold = threshold;
+  window.ccStats.change = null;
+  det.armed = true;
+};
+
+// --- HLS(比較用) ---------------------------------------------------------------------
+async function startHls() {
+  const camera = $('camera').value;
+  window.ccStats = { ...window.ccStats, state: 'issuing', camera, mode: 'hls', t_start: performance.now() };
+  const res = await fetch(`/api/cameras/${encodeURIComponent(camera)}/kvs-hls`);
+  const info = await res.json();
+  if (!res.ok) { log(`発行に失敗: ${JSON.stringify(info)}`, true); window.ccStats.state = 'error'; return; }
+  const v = $('video');
+  v.addEventListener('loadeddata', () => {
+    window.ccStats.t_first_frame_ms = Math.round(performance.now() - window.ccStats.t_start);
+    log(`最初のフレーム: ${window.ccStats.t_first_frame_ms}ms(接続ボタンから)`);
+    window.ccStats.state = 'connected';
+  }, { once: true });
+  if (window.Hls && Hls.isSupported()) {
+    // KVS の LIVE は断片 1 秒。既定(liveSyncDurationCount=3)のまま、なるべく端に寄せる設定だけ足す
+    hls = new Hls({ lowLatencyMode: false, liveSyncDurationCount: 3, maxLiveSyncPlaybackRate: 1.2 });
+    hls.loadSource(info.url);
+    hls.attachMedia(v);
+  } else {
+    v.src = info.url;
+  }
+  v.play().catch(() => {});
+  statsTimer = setInterval(() => {
+    window.ccStats.frames_decoded = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames : null;
+    window.ccStats.resolution = v.videoWidth ? `${v.videoWidth}x${v.videoHeight}` : null;
+    window.ccStats.buffer_ahead_s = v.buffered.length ? Math.round((v.buffered.end(v.buffered.length - 1) - v.currentTime) * 100) / 100 : null;
+    $('stats').textContent = `mode               hls\nresolution         ${window.ccStats.resolution}\nframes             ${window.ccStats.frames_decoded}\nbuffer_ahead_s     ${window.ccStats.buffer_ahead_s}`;
+  }, 1000);
+}
+
 async function start() {
   stop();
+  if ($('mode').value === 'hls') return startHls();
   const camera = $('camera').value;
   const codec = $('codec').value;
   const relay = $('relay').checked;
@@ -117,6 +193,8 @@ function stop() {
   if (statsTimer) clearInterval(statsTimer);
   statsTimer = null;
   prevInbound = null;
+  if (hls) hls.destroy();
+  hls = null;
   if (signaling) signaling.close();
   if (pc) pc.close();
   signaling = null;
@@ -180,6 +258,8 @@ async function collectStats() {
 $('start').addEventListener('click', () => start().catch((e) => log(`接続に失敗: ${e}`, true)));
 $('stop').addEventListener('click', stop);
 if (params.get('camera')) $('camera').value = params.get('camera');
+if (params.get('mode')) $('mode').value = params.get('mode');
+if ($('video').requestVideoFrameCallback) $('video').requestVideoFrameCallback(onFrame);
 if (params.get('codec')) $('codec').value = params.get('codec');
 if (params.get('relay') === '1') $('relay').checked = true;
 showH265Capability();

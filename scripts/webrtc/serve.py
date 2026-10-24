@@ -6,6 +6,7 @@
     mise exec -- uv run --with boto3 scripts/webrtc/serve.py --project cc-tmp-webrtc
     # → http://127.0.0.1:8765/?camera=cam-001
 
+GET /api/cameras/{camera_id}/kvs-hls → {"url"}(比較用。既存 API と同じ LIVE の HLS)
 GET /api/cameras/{camera_id}/webrtc → {
     "channel_name", "channel_arn", "region", "client_id",
     "wss_url": 署名付きの ConnectAsViewer の URL(X-Amz-Expires=299),
@@ -98,6 +99,19 @@ def make_handler(session: boto3.Session, region: str, project: str):
         def do_GET(self):  # noqa: N802
             path = urlparse(self.path).path
             parts = path.strip("/").split("/")
+            if len(parts) == 4 and parts[:2] == ["api", "cameras"] and parts[3] == "kvs-hls":
+                # 比較用: 既存 API の kvs-hls(LIVE、fMP4)と同じもの
+                try:
+                    stream = f"{project}-{parts[2]}"
+                    kv = session.client("kinesisvideo", region_name=region)
+                    ep = kv.get_data_endpoint(StreamName=stream, APIName="GET_HLS_STREAMING_SESSION_URL")["DataEndpoint"]
+                    am = session.client("kinesis-video-archived-media", region_name=region, endpoint_url=ep)
+                    url = am.get_hls_streaming_session_url(StreamName=stream, PlaybackMode="LIVE",
+                                                           ContainerFormat="FRAGMENTED_MP4", Expires=3600)["HLSStreamingSessionURL"]
+                    self._send(200, json.dumps({"url": url}).encode(), "application/json")
+                except Exception as e:
+                    self._send(500, json.dumps({"error": {"code": type(e).__name__, "message": str(e)}}).encode(), "application/json")
+                return
             if len(parts) == 4 and parts[:2] == ["api", "cameras"] and parts[3] == "webrtc":
                 t0 = time.monotonic()
                 try:
