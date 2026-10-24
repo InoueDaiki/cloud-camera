@@ -234,3 +234,46 @@ timeline のレスポンス:
   - RTP から取り出したフレームには DTS がなく、kvssink は「VPS/SPS/PPS を含み DTS が無効」なキーフレームを捨てる。`h265timestamper` で DTS を付ける
 - フラグメントはキーフレームごと(エミュレーターのキーフレーム間隔 1 秒 → 1 秒ごと)。ProducerTimestamp はゲートウェイの壁時計(NTP 前提)で、最初のフレームを受け取った時刻 + PTS の差分
 - `FragmentLengthInMilliseconds` は「最後のフレームの開始 − 最初のフレームの開始」で、1 フレーム分(15fps なら 67ms)短い。`segments` をつなぐ許容値(500ms)には収まる
+
+## PTZ(IoT Core 経由の制御とエミュレーターの疑似 PTZ)
+
+ビューワー → API → IoT Core(cmd トピック)→ エッジ → ONVIF PTZ → エミュレーター、の順に流れる。
+エミュレーターは光学 PTZ の代わりに、元映像から切り出す範囲(クロップ)を動かして疑似 PTZ にする(デジタル PTZ)。
+
+### 座標(ONVIF の Generic 空間に合わせる)
+
+| 値 | 範囲 | 意味 |
+| --- | --- | --- |
+| `pan` | -1〜1 | 切り出し窓の水平位置。-1 が左端、1 が右端 |
+| `tilt` | -1〜1 | 切り出し窓の垂直位置。-1 が下端、1 が上端(ONVIF の向きに合わせる) |
+| `zoom` | 0〜1 | 0 が全体(等倍)、1 が最大倍率(既定 4 倍、エミュレーターの設定) |
+
+速度(ContinuousMove)は pan/tilt/zoom とも -1〜1。等倍のときは pan/tilt を動かしても見た目は変わらない。
+
+### エミュレーター(ONVIF PTZ サービス)
+
+- サービス URL `http://<host>:<port>/onvif/ptz_service`。GetServices / GetCapabilities に載せ、各プロファイル(main と sub)に同じ PTZConfiguration を付ける(main と sub は同じ切り出し窓)
+- 操作: GetNodes、GetNode、GetConfigurations、GetConfiguration、GetConfigurationOptions、GetStatus、ContinuousMove(Timeout 対応)、RelativeMove、AbsoluteMove、Stop、GetPresets、SetPreset、RemovePreset、GotoPreset、GotoHomePosition、SetHomePosition
+- 動きは速度上限付きで滑らかに(瞬間移動しない)。GetStatus の MoveStatus は `MOVING` / `IDLE`
+- 元映像は出力より高い解像度で作り(または読み)、切り出してから出力解像度に拡大縮小する。PTZ の操作で配信(RTSP)を途切れさせない。解像度とコーデックのパラメータは変えない(KVS の GetClip などはコーデック情報が変わるとエラーになるため)
+
+### MQTT
+
+`{p}/{gw}/cmd` に次を送る(既存の cmd に `ptz` を追加):
+
+```json
+{"action": "ptz", "camera_id": "cam-001", "request_id": "uuid",
+ "op": "continuous" | "stop" | "absolute" | "relative" | "goto_preset" | "set_preset" | "home",
+ "pan": 0.5, "tilt": 0, "zoom": 0, "timeout_ms": 10000, "preset_token": "1", "preset_name": "玄関"}
+```
+
+- `continuous` は速度、`absolute` は位置、`relative` は差分。`timeout_ms` は continuous の自動停止(既定 10000。stop を取りこぼしても動き続けない)
+- エッジは結果を `{p}/{gw}/ptz` に送る: `{"ts", "gateway_id", "camera_id", "request_id", "ok", "error"?, "position": {"pan", "tilt", "zoom"}, "move_status"}`
+- エッジはシャドウの `reported.cameras.{camera_id}.ptz` に `{"supported": bool, "pan", "tilt", "zoom", "presets": [{"token", "name"}], "updated_at"}` を書く。動いている間は 1 秒に 1 回まで、止まったら必ず 1 回
+
+### HTTP API
+
+| メソッドとパス | 内容 |
+| --- | --- |
+| `POST /api/cameras/{id}/ptz` | 本文は MQTT の `op` 以降と同じ形。cmd トピックに QoS 1 で publish し、`202 {"request_id"}` を返す |
+| `GET /api/cameras/{id}/ptz` | シャドウの `reported.cameras.{id}.ptz` を返す。なければ `{"supported": false}` |
