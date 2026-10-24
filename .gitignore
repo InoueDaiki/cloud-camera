@@ -25,3 +25,5 @@ build/
 emulator/media/*.mp4
 # Claude Code のワークツリー
 .claude/worktrees/
+# ONNX の外部データ(モデルの準備で出る一時ファイル)
+lambdas/detector/*.data

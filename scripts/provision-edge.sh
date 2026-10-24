@@ -4,6 +4,8 @@
 #   scripts/provision-edge.sh                    # infra/ の terraform output を読む(全ゲートウェイ)
 #   scripts/provision-edge.sh gw-001             # 指定したゲートウェイだけ
 #   TF_OUTPUT_JSON=out.json scripts/provision-edge.sh   # terraform output -json の保存結果を使う
+#   PROJECT=cc-tmp-e2e scripts/provision-edge.sh         # そのプロジェクトのワークスペースの output を読む
+#                                                       # (deploy.sh は project 名と同じワークスペースを使う。既定 cloud-camera)
 #
 # 前提とする Terraform の output:
 #   project, iot_data_endpoint, iot_credential_endpoint, kvs_role_alias,
@@ -26,7 +28,8 @@ trap 'rm -rf "$tmp"' EXIT
 if [[ -n "${TF_OUTPUT_JSON:-}" ]]; then
   cp "$TF_OUTPUT_JSON" "$tmp/tf.json"
 else
-  terraform -chdir="$INFRA_DIR" output -json >"$tmp/tf.json"
+  # 今選ばれているワークスペースではなく、PROJECT のワークスペースを読む
+  TF_WORKSPACE="${PROJECT:-cloud-camera}" terraform -chdir="$INFRA_DIR" output -json >"$tmp/tf.json"
 fi
 
 curl -fsSL "$ROOT_CA_URL" -o "$tmp/AmazonRootCA1.pem"
