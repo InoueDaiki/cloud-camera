@@ -37,7 +37,7 @@ scripts/destroy.sh cc-tmp-foo
 | `lambda_settings` | `{}` | 関数ごとの `memory_size` / `timeout` / `ephemeral_storage` の上書き。既定は `locals.tf`(video_archiver 1024MB・300 秒、detector 3008MB・300 秒、api 512MB・30 秒) |
 | `lambda_layers` | `{}` | 関数ごとのレイヤー ARN(例: `{detector = ["arn:...:AWSSDKPandas-Python313-Arm64:N"]}`) |
 | `lambda_zip_dir` | null(リポジトリ直下の `build/`) | zip の置き場所 |
-| `bedrock_model_id` | `jp.anthropic.claude-haiku-5-5` | 推論プロファイル ID か基盤モデル ID |
+| `bedrock_model_id` | `jp.amazon.nova-2-lite-v1:0` | 推論プロファイル ID か基盤モデル ID |
 | `athena_bytes_scanned_cutoff` | 1 GiB | 1 クエリのスキャン量の上限 |
 | `schedule_enabled` | true | false でスケジュールを止める |
 | `log_retention_days` | 14 | ロググループの保持日数 |

@@ -108,7 +108,7 @@ variable "schedule_enabled" {
 variable "bedrock_model_id" {
   description = "自然言語検索に使う Bedrock のモデル ID か推論プロファイル ID"
   type        = string
-  default     = "jp.anthropic.claude-haiku-5-5"
+  default     = "jp.amazon.nova-2-lite-v1:0"
 }
 
 variable "athena_bytes_scanned_cutoff" {
