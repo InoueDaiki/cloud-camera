@@ -1,0 +1,39 @@
+# エミュレーター(配信元)とエッジゲートウェイを一緒に起動する。
+#
+#   ドライラン(AWS なし):  docker compose up --build
+#   実 AWS:                 CC_SINK=kvs CC_GATEWAY_ID=gw-001 docker compose up --build
+#                           (edge/.certs/gw-001/ に scripts/provision-edge.sh で証明書と config.json を置く)
+#
+# TODO: emulator/compose.yaml が main に入ったら include: に差し替え、仮の配信元 fakecam を消す。
+name: cloud-camera
+
+services:
+  # 仮の配信元: MediaMTX + FFmpeg で H.265 のテストパターンを RTSP 配信する(ONVIF はなし)
+  fakecam:
+    image: bluenviron/mediamtx:1.21.1-ffmpeg
+    volumes:
+      - ./edge/dev/mediamtx.yml:/mediamtx.yml:ro
+    ports:
+      - "8554:8554"
+
+  edge:
+    build:
+      context: ./edge
+    image: cc-edge:dev
+    depends_on: [fakecam]
+    environment:
+      CC_PROJECT: ${CC_PROJECT:-cloud-camera}
+      CC_GATEWAY_ID: ${CC_GATEWAY_ID:-gw-001}
+      # fake / file はドライラン(KVS に送らない)。kvs で実際に送る
+      CC_SINK: ${CC_SINK:-fake}
+      # シャドウを使わずに compose 内の設定だけで動かす場合は false
+      CC_USE_SHADOW: ${CC_USE_SHADOW:-false}
+      CC_CONFIG_FILE: /certs/config.json
+      CC_OUTPUT_DIR: /out
+      CC_LOG_LEVEL: ${CC_LOG_LEVEL:-INFO}
+      # ローカル設定のカメラ(CC_USE_SHADOW=false のとき使う。シャドウの desired.cameras と同じ形 + rtsp_url)
+      CC_CAMERAS: ${CC_CAMERAS:-{"cam-001":{"rtsp_url":"rtsp://fakecam:8554/cam1/main","codec":"H265","streaming":true}}}
+    volumes:
+      - ./edge/.certs/${CC_GATEWAY_ID:-gw-001}:/certs:ro
+      - ./edge/.out:/out
+    restart: unless-stopped

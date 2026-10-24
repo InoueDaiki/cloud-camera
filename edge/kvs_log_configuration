@@ -1,0 +1,7 @@
+# kvssink(Producer SDK)のログ設定。標準エラーに WARN 以上を出す。
+# 詳しく見たいときは WARN を INFO / DEBUG に変えたファイルを /opt/kvs/kvs_log_configuration にマウントする。
+log4cplus.rootLogger=WARN, KvsConsoleAppender
+log4cplus.appender.KvsConsoleAppender=log4cplus::ConsoleAppender
+log4cplus.appender.KvsConsoleAppender.logToStdErr=true
+log4cplus.appender.KvsConsoleAppender.layout=log4cplus::PatternLayout
+log4cplus.appender.KvsConsoleAppender.layout.ConversionPattern=[kvs %-5p] %m%n
