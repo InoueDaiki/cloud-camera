@@ -4,7 +4,7 @@ GetImages で 1 分区間を 1 秒間隔の JPEG(最大 60 枚)として取得 �
 → NMS → その日の Parquet の該当区間を置き換える。画像は S3 に置かない。
 
 環境変数(Terraform と合意済み): STATE_TABLE, DETECTIONS_BUCKET, STREAM_NAME_PREFIX, LAG_SECONDS,
-MAX_MINUTES, MAX_ATTEMPTS, MEDIA_RETENTION_DAYS
+MAX_MINUTES, MAX_ATTEMPTS, MEDIA_RETENTION_DAYS(MAX_WAIT_SECONDS は video_archiver と共通の省略可能な値)
 モデル関係(省略時は既定値): DETECT_MODEL, DETECT_INPUT_WIDTH, DETECT_IMAGE_HEIGHT, DETECT_THREADS,
 DETECT_BATCH, DETECT_SCORE_THRESHOLD, DETECT_NMS_THRESHOLD
 """
@@ -18,7 +18,8 @@ from datetime import datetime, timezone
 import boto3
 
 import parquet_store
-from common import MinuteResult, kvs, log, max_rss_mb, run_pipeline
+from common import MinuteResult, NotReady, kvs, log, max_rss_mb, run_pipeline
+from common.timeutil import epoch_ms, from_epoch_ms, utcnow
 from detect import Detector
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -85,6 +86,35 @@ def detections_to_rows(camera_id: str, frames: list[tuple[datetime, list]], mode
     return rows
 
 
+def fetch_images(stream: str, start: datetime, end: datetime, fragments, width: int, height: int) -> list:
+    """1 秒間隔の JPEG を取る。
+
+    GetImages は範囲の始まりの近くに断片がないと ResourceNotFoundException になる(実測。録画が区間の途中から
+    始まるときなど)。そのときは録画がある範囲ごとに「開始を秒に切り上げた時刻 〜 終わり」で取り直す
+    (断片のちょうど開始時刻を指定すると MEDIA_ERROR が返ることがあるため切り上げる。video_archiver と同じ)。
+    """
+    try:
+        return kvs.get_images(stream, start, end, interval_ms=1000, width=width, height=height)
+    except Exception as e:  # noqa: BLE001
+        if "ResourceNotFound" not in type(e).__name__ and "ResourceNotFound" not in str(e):
+            raise
+    out = []
+    s_ms, e_ms = epoch_ms(start), epoch_ms(end)
+    for seg_s, seg_e in kvs.build_segments(fragments):
+        a = max(s_ms, -(-seg_s // 1000) * 1000)
+        b = min(e_ms, seg_e)
+        if a >= b:
+            continue
+        try:
+            out += kvs.get_images(stream, from_epoch_ms(a), from_epoch_ms(b), interval_ms=1000,
+                                  width=width, height=height)
+        except Exception as e:  # noqa: BLE001
+            if "ResourceNotFound" not in type(e).__name__ and "ResourceNotFound" not in str(e):
+                raise
+            log("detect_segment_no_images", stream=stream, seg_start_ms=a, seg_end_ms=b)
+    return sorted(out, key=lambda im: im.ts_ms)
+
+
 def process_minute(camera_id: str, start: datetime, end: datetime) -> MinuteResult:
     t0 = time.perf_counter()
     stream = kvs.stream_name_for(camera_id)
@@ -94,12 +124,24 @@ def process_minute(camera_id: str, start: datetime, end: datetime) -> MinuteResu
     # 既定は 16:9。カメラのアスペクト比が違うときは DETECT_IMAGE_HEIGHT で合わせる
     height = _env_int("DETECT_IMAGE_HEIGHT", round(width * 9 / 16))
 
+    # 0. 断片が出そろうまで待つ(エッジの送信が遅れているとき。common.kvs.minute_ready)
+    ready, why = kvs.minute_ready(stream, end, utcnow(), quiet_seconds=_env_int("LAG_SECONDS", 60),
+                                  max_wait_seconds=_env_int("MAX_WAIT_SECONDS", 600))
+    if not ready:
+        raise NotReady(why)
+
     # 1. 取得(録画がなければ GetImages を呼ばない)
     t = time.perf_counter()
     fragments = kvs.list_fragments(stream, start, end)
-    images = kvs.get_images(stream, start, end, interval_ms=1000, width=width, height=height) if fragments else []
-    ok = [im for im in images if im.content and not im.error and
-          start.timestamp() * 1000 <= im.ts_ms < end.timestamp() * 1000]
+    images = fetch_images(stream, start, end, fragments, width, height) if fragments else []
+    # GetImages は終わりの時刻も含む(1 秒間隔で 61 枚)ので、start ≤ ts < end に絞る
+    s_ms, e_ms = epoch_ms(start), epoch_ms(end)
+    seen: set[int] = set()
+    ok = []
+    for im in images:
+        if im.content and not im.error and s_ms <= im.ts_ms < e_ms and im.ts_ms not in seen:
+            seen.add(im.ts_ms)
+            ok.append(im)
     errors: dict[str, int] = {}
     for im in images:
         if im.error:

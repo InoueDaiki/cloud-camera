@@ -57,6 +57,7 @@ def _fake_kvs(monkeypatch, start, n, gaps=()):
 
     monkeypatch.setattr(kvs, "list_fragments", list_fragments)
     monkeypatch.setattr(kvs, "get_images", get_images)
+    monkeypatch.setattr(kvs, "minute_ready", lambda *a, **k: (True, "quiet"))
     return calls
 
 
@@ -91,3 +92,44 @@ def test_process_minute_empty(env, monkeypatch):
     assert res.status == "EMPTY"
     assert res.attributes == {"detect_count": 0, "frame_count": 0}
     assert s3.list_objects_v2(Bucket=BUCKET).get("KeyCount", 0) == 0
+
+
+def test_not_ready_raises(env, monkeypatch):
+    handler, s3 = env
+    from common import NotReady
+
+    start = datetime(2026, 10, 24, 10, 20, tzinfo=UTC)
+    _fake_kvs(monkeypatch, start, n=60)
+    monkeypatch.setattr(kvs, "minute_ready", lambda *a, **k: (False, "producer_behind"))
+    with pytest.raises(NotReady):
+        handler.process_minute("cam-001", start, start + timedelta(minutes=1))
+
+
+def test_resource_not_found_falls_back_to_segments(env, monkeypatch):
+    """録画が区間の途中(10:20:30.4〜)から始まると GetImages が ResourceNotFound になる → 録画範囲で取り直す。"""
+    handler, s3 = env
+    start = datetime(2026, 10, 24, 10, 20, tzinfo=UTC)
+    base = int(start.timestamp() * 1000)
+    with open(os.path.join(FIXTURES, "person.jpg"), "rb") as f:
+        jpeg = f.read()
+    frags = [kvs.Fragment(number=str(i), producer_ms=base + 30_400 + i * 1000, server_ms=0, length_ms=1000, size=1)
+             for i in range(29)]
+    calls = []
+
+    class ResourceNotFoundException(Exception):
+        pass
+
+    def get_images(stream, s, e, interval_ms, width, height):
+        calls.append((int(s.timestamp() * 1000) - base, int(e.timestamp() * 1000) - base))
+        if len(calls) == 1:
+            raise ResourceNotFoundException("no fragments near start")
+        a, b = calls[-1]
+        return [kvs.Image(ts_ms=base + t, content=jpeg, error=None) for t in range(a, b + 1, 1000)]
+
+    monkeypatch.setattr(kvs, "minute_ready", lambda *a, **k: (True, "quiet"))
+    monkeypatch.setattr(kvs, "list_fragments", lambda *a: frags)
+    monkeypatch.setattr(kvs, "get_images", get_images)
+    res = handler.process_minute("cam-001", start, start + timedelta(minutes=1))
+    # 2 回目は録画の始まりを秒に切り上げた 10:20:31 から
+    assert calls == [(0, 60_000), (31_000, 59_400)]
+    assert res.status == "DONE" and res.attributes["frame_count"] == 29
