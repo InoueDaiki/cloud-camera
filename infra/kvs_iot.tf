@@ -113,6 +113,8 @@ data "aws_iam_policy_document" "kvs_producer_assume" {
 resource "aws_iam_role" "kvs_producer" {
   name               = "${local.p}-kvs-producer"
   assume_role_policy = data.aws_iam_policy_document.kvs_producer_assume.json
+  # ロールエイリアスの credential_duration 以上にする必要がある
+  max_session_duration = 43200
 }
 
 data "aws_iam_policy_document" "kvs_producer" {
@@ -135,7 +137,9 @@ resource "aws_iam_role_policy" "kvs_producer" {
 }
 
 resource "aws_iot_role_alias" "kvs" {
-  alias               = local.kvs_role_alias
-  role_arn            = aws_iam_role.kvs_producer.arn
-  credential_duration = 3600
+  alias    = local.kvs_role_alias
+  role_arn = aws_iam_role.kvs_producer.arn
+  # 回線断の最中に認証情報の取り直しが重なると kvssink が止まり、バッファが消える(edge/README.md「回線断とバッファ」)。
+  # 取り直しの頻度を下げるため、上限の 12 時間にする
+  credential_duration = 43200
 }
