@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>H.265 ブラウザ確認</title>
+<style>
+  :root { --fg: #1b1f24; --bg: #fff; --muted: #59636e; --ok: #1a7f37; --ng: #cf222e; --warn: #9a6700; --line: #d1d9e0; --code: #f6f8fa; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #e6edf3; --bg: #0d1117; --muted: #9198a1; --ok: #3fb950; --ng: #f85149; --warn: #d29922; --line: #3d444d; --code: #151b23; }
+  }
+  body { font: 14px/1.6 system-ui, -apple-system, "Hiragino Sans", sans-serif; color: var(--fg); background: var(--bg); margin: 0 auto; max-width: 960px; padding: 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 24px 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+  .muted { color: var(--muted); }
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; margin: 12px 0; }
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .card b { display: block; font-size: 18px; }
+  .ok { color: var(--ok); } .ng { color: var(--ng); } .warn { color: var(--warn); }
+  .tbl { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: left; vertical-align: top; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  pre { background: var(--code); padding: 8px; overflow: auto; max-height: 320px; }
+  video { width: 160px; background: #000; margin-right: 4px; }
+  button { font: inherit; padding: 4px 10px; }
+</style>
+</head>
+<body>
+<h1>H.265(HEVC)ブラウザ確認</h1>
+<p class="muted">このブラウザで H.265 の録画(MSE / ネイティブ HLS)とライブ(WebRTC)を再生できるかを調べます。結果はページ下の JSON をコピーして共有してください。
+外部への送信はしません。</p>
+
+<div class="summary" id="summary"><div class="card">確認中…</div></div>
+
+<h2>環境</h2>
+<div class="tbl"><table id="env"></table></div>
+
+<h2>実再生(テスト用の 3 秒の fMP4)</h2>
+<div id="videos"></div>
+<div class="tbl"><table id="play"></table></div>
+
+<h2>MediaSource.isTypeSupported / canPlayType</h2>
+<div class="tbl"><table id="types"></table></div>
+
+<h2>MediaCapabilities.decodingInfo</h2>
+<div class="tbl"><table id="mc"></table></div>
+
+<h2>WebCodecs VideoDecoder.isConfigSupported(参考)</h2>
+<div class="tbl"><table id="wc"></table></div>
+
+<h2>WebRTC</h2>
+<div class="tbl"><table id="rtc"></table></div>
+
+<h2>結果(JSON)</h2>
+<button id="copy">コピー</button>
+<pre id="json"></pre>
+
+<script src="check.js"></script>
+</body>
+</html>

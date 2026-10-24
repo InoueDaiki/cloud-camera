@@ -1,0 +1,13 @@
+{
+  "name": "cc-browser-check",
+  "private": true,
+  "type": "module",
+  "description": "H.265 の再生可否(MSE / canPlayType / MediaCapabilities / WebRTC)を Playwright の各ブラウザで確かめる",
+  "scripts": {
+    "check": "node run.mjs",
+    "serve": "python3 -m http.server 8765"
+  },
+  "devDependencies": {
+    "playwright": "1.64.1"
+  }
+}

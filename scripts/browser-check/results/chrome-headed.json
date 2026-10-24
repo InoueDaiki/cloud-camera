@@ -1,0 +1,284 @@
+{
+  "checkedAt": "2026-10-24T06:06:50.248Z",
+  "env": {
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+    "platform": "MacIntel",
+    "hardwareConcurrency": 10,
+    "uaData": {
+      "platform": "macOS",
+      "platformVersion": "26.6.2",
+      "architecture": "arm",
+      "model": "",
+      "mobile": false,
+      "brands": "Google Chrome 155.0.8059.85, Chromium 155.0.8059.85, Not(A:Brand 24.0.0.0"
+    },
+    "MediaSource": true,
+    "ManagedMediaSource": false,
+    "RTCPeerConnection": true,
+    "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M5, Unspecified Version)"
+  },
+  "types": [
+    {
+      "type": "video/mp4; codecs=\"hvc1.1.6.L93.90\"",
+      "isTypeSupported": true,
+      "canPlayType": "probably"
+    },
+    {
+      "type": "video/mp4; codecs=\"hev1.1.6.L93.90\"",
+      "isTypeSupported": true,
+      "canPlayType": "probably"
+    },
+    {
+      "type": "video/mp4; codecs=\"hvc1.1.6.L120.90\"",
+      "isTypeSupported": true,
+      "canPlayType": "probably"
+    },
+    {
+      "type": "video/mp4; codecs=\"hvc1.1.6.L150.90\"",
+      "isTypeSupported": true,
+      "canPlayType": "probably"
+    },
+    {
+      "type": "video/mp4; codecs=\"hvc1.2.4.L120.90\"",
+      "isTypeSupported": true,
+      "canPlayType": "probably"
+    },
+    {
+      "type": "video/mp4; codecs=\"hvc1.1.6.L93.90,mp4a.40.2\"",
+      "isTypeSupported": true,
+      "canPlayType": "probably"
+    },
+    {
+      "type": "video/mp4; codecs=\"avc1.42E01E\"",
+      "isTypeSupported": true,
+      "canPlayType": "probably"
+    },
+    {
+      "type": "video/mp4; codecs=\"avc1.640028\"",
+      "isTypeSupported": true,
+      "canPlayType": "probably"
+    },
+    {
+      "type": "application/vnd.apple.mpegurl",
+      "isTypeSupported": false,
+      "canPlayType": "maybe"
+    }
+  ],
+  "mediaCapabilities": [
+    {
+      "label": "H.265 720p30",
+      "media-source": {
+        "supported": true,
+        "smooth": true,
+        "powerEfficient": true
+      },
+      "file": {
+        "supported": true,
+        "smooth": true,
+        "powerEfficient": true
+      }
+    },
+    {
+      "label": "H.265 1080p30",
+      "media-source": {
+        "supported": true,
+        "smooth": true,
+        "powerEfficient": true
+      },
+      "file": {
+        "supported": true,
+        "smooth": true,
+        "powerEfficient": true
+      }
+    },
+    {
+      "label": "H.265 4K30",
+      "media-source": {
+        "supported": true,
+        "smooth": true,
+        "powerEfficient": true
+      },
+      "file": {
+        "supported": true,
+        "smooth": true,
+        "powerEfficient": true
+      }
+    },
+    {
+      "label": "H.265 Main10 1080p30",
+      "media-source": {
+        "supported": true,
+        "smooth": true,
+        "powerEfficient": true
+      },
+      "file": {
+        "supported": true,
+        "smooth": true,
+        "powerEfficient": true
+      }
+    },
+    {
+      "label": "H.264 1080p30(比較)",
+      "media-source": {
+        "supported": true,
+        "smooth": true,
+        "powerEfficient": true
+      },
+      "file": {
+        "supported": true,
+        "smooth": true,
+        "powerEfficient": true
+      }
+    }
+  ],
+  "webCodecs": [
+    {
+      "codec": "hvc1.1.6.L93.90",
+      "hardwareAcceleration": "no-preference",
+      "supported": true
+    },
+    {
+      "codec": "hvc1.1.6.L93.90",
+      "hardwareAcceleration": "prefer-hardware",
+      "supported": true
+    },
+    {
+      "codec": "hvc1.1.6.L93.90",
+      "hardwareAcceleration": "prefer-software",
+      "supported": false
+    },
+    {
+      "codec": "hvc1.2.4.L120.90",
+      "hardwareAcceleration": "no-preference",
+      "supported": true
+    },
+    {
+      "codec": "hvc1.2.4.L120.90",
+      "hardwareAcceleration": "prefer-hardware",
+      "supported": true
+    },
+    {
+      "codec": "hvc1.2.4.L120.90",
+      "hardwareAcceleration": "prefer-software",
+      "supported": false
+    },
+    {
+      "codec": "avc1.42E01E",
+      "hardwareAcceleration": "no-preference",
+      "supported": true
+    },
+    {
+      "codec": "avc1.42E01E",
+      "hardwareAcceleration": "prefer-hardware",
+      "supported": true
+    },
+    {
+      "codec": "avc1.42E01E",
+      "hardwareAcceleration": "prefer-software",
+      "supported": true
+    }
+  ],
+  "play": [
+    {
+      "via": "MSE",
+      "id": "hevc-main",
+      "label": "H.265 Main 8bit",
+      "ok": true,
+      "currentTime": 0.5,
+      "frames": 11,
+      "dropped": 0,
+      "size": "640x360",
+      "brightness": 126
+    },
+    {
+      "via": "src=",
+      "id": "hevc-main",
+      "label": "H.265 Main 8bit",
+      "ok": true,
+      "currentTime": 0.52,
+      "frames": 10,
+      "dropped": 0,
+      "size": "640x360",
+      "brightness": 127
+    },
+    {
+      "via": "MSE",
+      "id": "hevc-main10",
+      "label": "H.265 Main10",
+      "ok": true,
+      "currentTime": 0.6,
+      "frames": 12,
+      "dropped": 0,
+      "size": "640x360",
+      "brightness": 126
+    },
+    {
+      "via": "src=",
+      "id": "hevc-main10",
+      "label": "H.265 Main10",
+      "ok": true,
+      "currentTime": 0.53,
+      "frames": 11,
+      "dropped": 0,
+      "size": "640x360",
+      "brightness": 126
+    },
+    {
+      "via": "MSE",
+      "id": "h264-main",
+      "label": "H.264 Main(比較)",
+      "ok": true,
+      "currentTime": 0.6,
+      "frames": 13,
+      "dropped": 0,
+      "size": "640x360",
+      "brightness": 127
+    },
+    {
+      "via": "src=",
+      "id": "h264-main",
+      "label": "H.264 Main(比較)",
+      "ok": true,
+      "currentTime": 0.52,
+      "frames": 13,
+      "dropped": 3,
+      "size": "640x360",
+      "brightness": 127
+    }
+  ],
+  "rtc": {
+    "receiverH265": [
+      "level-id=180;profile-id=1;tier-flag=0;tx-mode=SRST",
+      "level-id=180;profile-id=2;tier-flag=0;tx-mode=SRST"
+    ],
+    "senderH265": [
+      "level-id=186;profile-id=1;tier-flag=0;tx-mode=SRST"
+    ],
+    "loopback": {
+      "ok": null,
+      "note": "送信側のエンコーダがフレームを出さなかった(受信側の可否は不明)",
+      "framesEncoded": 0
+    },
+    "receiverCodecs": [
+      "video/VP8",
+      "video/rtx",
+      "video/VP9",
+      "video/H264",
+      "video/AV1",
+      "video/H265",
+      "video/red",
+      "video/ulpfec",
+      "video/flexfec-03"
+    ]
+  },
+  "summary": {
+    "recording": true,
+    "recordingNote": "MSE(hls.js)で H.265 の fMP4 を再生できた",
+    "webrtc": true,
+    "webrtcNote": "受信能力あり(折り返しでは確かめられず。詳細は下の WebRTC 表)"
+  },
+  "browser": {
+    "name": "chrome-headed",
+    "version": "155.0.8059.85"
+  }
+}
