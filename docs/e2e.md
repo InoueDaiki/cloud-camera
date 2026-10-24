@@ -57,6 +57,7 @@ scripts/destroy.sh cc-tmp-e2e           # 手で消すとき(AUTO_APPROVE=1 で�
 | `search` | `POST /api/search` が回答を返す。detector が本物なら SQL が実行されていること | Bedrock のモデルアクセス、Athena |
 | `cursors` | 60 秒のあいだ 10 秒ごとに `CURSOR#DETECT` と `CURSOR#VIDEO` の `processed_until` を読み、物体検出の処理済み位置が動画の退避の処理済み位置を越えないこと(`/api/cameras` の値も) | detector が退避を待たずに進んでいる(common の区間の条件) |
 | `browser-<b>-live` / `-kvs` / `-s3` | CloudFront の URL を実ブラウザで開き、ライブ、直近の録画(処理済み位置より後、KVS ON_DEMAND)、録画(S3 の vod.m3u8)のそれぞれで、映像右上の再生元の表示が切り替わり、4 秒で currentTime が 1.5 秒以上進み、`videoWidth > 0`、`video.error` もエラー表示もないこと。スクリーンショットを撮る | 下の「ブラウザと H.265」 |
+| `browser-chrome-ptz` | Chrome でライブを再生しながら `POST /api/cameras/cam-001/ptz`(`{"op": "absolute", "pan": 0, "tilt": 0, "zoom": 1}`)を送り、`GET .../ptz` の zoom が 1 になるまでの時間と、映像の焼き込み 4 行目(`PTZ pan ... zoom ...`)の白い文字の形(canvas で 2 値化)が変わるまでの時間を測る。終わったら zoom 0 に戻す。WebKit はネイティブ HLS の映像を canvas で読めないので Chrome だけ(`E2E_PTZ=0` で飛ばす) | API の cmd publish、エッジの PTZ(ONVIF)、エミュレーターの PTZ。`edge-container.log` の ptz |
 | `stop` | `PUT /api/cameras/cam-001/streaming {"streaming": false}` で `reported.streaming=false` になる | エッジのシャドウ差分の適用 |
 | `getimages` | CloudWatch の `AWS/KinesisVideo` `GetImages.Requests`(ストリーム単位、配信開始の 10 分前から)の合計が 0。メトリクスは数分遅れるので `ListFragments.Requests` が見えるまで待つ。参考に `GetMP4MediaFragment.Requests` も出す | スプライトや推論が予備の経路(GetImages)に落ちている。Lambda のログで FAILED や clip.mp4 の読み込み失敗を見る |
 | `edge-down` | compose を止める(ログを保存) | |
@@ -124,7 +125,7 @@ mise exec -- node scripts/e2e/browser.mjs --url https://dxxxx.cloudfront.net --o
 | `kvs` で Producer と壁時計の差が大きい | Docker の VM の時計がずれている。Docker Desktop を再起動する |
 | `cameras` で online が false / null | MQTT に繋がっていない(証明書、ポリシー、エンドポイント)。`CC_PROJECT` が project と違うと Thing 名がずれる(`run.sh` は合わせて渡す) |
 | `archive` がタイムアウト | Scheduler が止まっている、video_archiver の失敗(`/aws/lambda/<p>-video-archiver`)。カーソルは「現在 − lag」から 5 分前で始まり、最初の区間は録画の途中から始まるので、断片 55 本以上の区間ができるまで 2〜3 分かかる |
-| `browser-*-kvs` が「時間帯が短すぎる」 | 配信開始直後で、処理済み位置より後の KVS の範囲が 20 秒もない。`archive` の後に回しているので通常は起きない |
+| `browser-*-kvs` が「KVS 録画の時間帯が短い」 | 退避が追いついていると、処理済み位置より後(KVS だけ)の範囲は 0〜60 秒しかない。23 秒以上になるまで最大 90 秒待つ。それでも短いなら退避の処理済み位置と timeline を見る |
 | `browser-chrome-*` で 0x0 のまま | Chrome が H.265 を再生できない(Chromium 同梱版、古い Chrome、ハードウェアデコーダーのない環境)。`ENV` 行の `isTypeSupported` を見る |
 | `destroy` が `BucketNotEmpty` | スケジュールを消す前に起動していた video_archiver が、空にした後のバケットに書いた。`destroy.sh` は 1 回やり直すようにした。それでも残れば `scripts/destroy.sh <project>` をもう一度 |
 | destroy を途中で失敗した後に再実行すると `BucketNotEmpty` | 途中の destroy で output が state から消え、空にするバケットが分からなかった。`destroy.sh` は state のバケットから名前を読むよう直した |
