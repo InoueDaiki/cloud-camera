@@ -7,6 +7,7 @@
      - EMULATOR_RTSP_PORT  既定 8554
      - EMULATOR_CAMERAS    台数(既定 2)
      - EMULATOR_DISCOVERY  multicast(既定) / unicast(EMULATOR_HOST:3702 に直接 Probe)
+     - EMULATOR_UI_PORT    操作画面のポート(既定 8090)
   2. EMULATOR_HOST なし: テストのプロセス内でエミュレーターを起動する(映像なし、SOAP と Discovery のみ)
 """
 
@@ -37,6 +38,7 @@ class Target:
     username: str
     password: str
     media: bool  # RTSP 配信があるか
+    ui_port: int = 8090
 
     def device_port(self, n: int) -> int:
         return self.onvif_port + n - 1
@@ -71,6 +73,7 @@ def target() -> Target:
             username=os.environ.get("EMULATOR_USERNAME", "admin"),
             password=os.environ.get("EMULATOR_PASSWORD", "admin"),
             media=os.environ.get("EMULATOR_MEDIA", "1") not in ("0", "false"),
+            ui_port=int(os.environ.get("EMULATOR_UI_PORT", "8090")),
         )
         return
 
@@ -78,7 +81,7 @@ def target() -> Target:
     from onvif_emulator.app import Emulator
     from onvif_emulator.config import load_config
 
-    base = _free_port_block(2)
+    base = _free_port_block(3)  # ONVIF × 2 + 操作画面
     runtime = tempfile.mkdtemp(prefix="onvif-emu-test-")
     cfg = load_config(
         env={
@@ -88,6 +91,7 @@ def target() -> Target:
             "EMULATOR_DISCOVERY_PORT": "13702",
             "EMULATOR_ADVERTISE_HOST": "127.0.0.1",
             "EMULATOR_RUNTIME_DIR": runtime,
+            "EMULATOR_UI_PORT": str(base + 2),
         }
     )
     loop = asyncio.new_event_loop()
@@ -113,6 +117,7 @@ def target() -> Target:
         username="admin",
         password="admin",
         media=False,
+        ui_port=base + 2,
     )
     asyncio.run_coroutine_threadsafe(emu.stop(), loop).result(10)
     loop.call_soon_threadsafe(loop.stop)

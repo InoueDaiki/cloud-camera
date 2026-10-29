@@ -6,12 +6,15 @@ rtsp_port: 8554
 discovery_enabled: true
 # advertise_host: 192.168.1.50   # XAddrs や RTSP URI に入れるホスト(未指定なら自動)
 rtsp_auth: false        # true で RTSP の読み出しにカメラの認証情報が必要
+ui_port: 8090           # 操作画面(ソースの切り替え、ブラウザのカメラ)。0 で無効
+live_fallback: smptebars  # live: の映像が来ていない間の代替映像
+# webrtc_hosts: [127.0.0.1]   # ICE の候補に載せるホスト(ブラウザから届く名前)
 
 # 全カメラ共通の既定値
 defaults:
   username: admin
   password: admin
-  source: testsrc       # testsrc / testsrc2 / smptebars / ... / file:/media/xxx.mp4
+  source: testsrc       # testsrc / testsrc2 / smptebars / ... / file:/media/xxx.mp4 / live:名前 / stream:rtsp://...
   width: 1280           # main(H.265)の解像度。実行中は変えられない
   height: 720
   fps: 15

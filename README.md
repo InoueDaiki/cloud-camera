@@ -138,7 +138,7 @@ EventBridge Scheduler がカメラごとに video_archiver と detector を毎�
 
 | パス | 中身 |
 | --- | --- |
-| [emulator/](emulator/README.md) | ONVIF カメラのエミュレーター(WS-Discovery、Device、Media、Media2、PTZ、RTSP) |
+| [emulator/](emulator/README.md) | ONVIF カメラのエミュレーター(WS-Discovery、Device、Media、Media2、PTZ、RTSP。映像はテストパターン・動画・ブラウザのカメラ・外部ストリームから選べる。操作画面 `http://localhost:8090/`) |
 | [edge/](edge/README.md) | エッジのコンテナ(エージェント、kvssink、WebRTC master)と Raspberry Pi への配置手順 |
 | [lambdas/common/](lambdas/common/README.md) | 処理済み位置・リース・ウォーターマークの共通処理、キーフレームのデコード |
 | [lambdas/video_archiver/](lambdas/video_archiver/README.md) | 動画の退避 |
@@ -150,6 +150,7 @@ EventBridge Scheduler がカメラごとに video_archiver と detector を毎�
 | [tools/codec/](docs/codec.md) | H.264 / H.265 の画質とビットレートの測定(VMAF)、実 KVS での比較。結果は `tools/codec/results/` |
 | [tools/scale/](docs/scale.md) | 台数を増やしたときの計測(10 カメラのエッジ、遅れの記録、起動の分析)。結果は `tools/scale/results/` |
 | [tools/browser-check/](docs/browser-hevc.md) | ブラウザの H.265 対応の確認ページと、Playwright での一括確認 |
+| [tools/emulator-webcam-check/](emulator/README.md#操作画面とブラウザのカメラ) | エミュレーターにブラウザのカメラを WHIP で送り込めることを Playwright(偽のカメラ)で確認 |
 | [scripts/](scripts/) | ビルド、デプロイ、削除、テスト、E2E(運用の手順。計測・調査の道具は `tools/`、コンポーネント固有の道具は各コンポーネントの `tools/`・`scripts/`・`bench/`) |
 | [docs/](docs/) | 決定事項、契約、調査と計測の記録(WebRTC、ブラウザ、コーデック、台数、E2E) |
 

@@ -3,7 +3,7 @@
 - 動いている間はフレーム間隔ごとに切り出し窓を計算し、変わった値だけを zmq で crop に送る
 - PTZ の操作があればすぐに起きる(待ち時間なしで次のフレームに反映する)
 - 止まっている間も 1 秒ごとに全部の値を送り直す(FFmpeg が再起動したときに状態を合わせ直すため。値が同じなら映像は変わらない)
-- 焼き込みの 4 行目(pan / tilt / zoom)のテキストファイルも同じタイミングで書き換える
+- 焼き込みの 4 行目(pan / tilt / zoom)のテキストファイルも同じタイミングで書き換える(note があれば最後の行に残す)
 
 zmq フィルターは REP ソケットなので、こちらは DEALER で [空フレーム, コマンド] を送る(応答を待たずに複数送れる)。
 IMMEDIATE を付け、FFmpeg が起動していない間のコマンドは溜めずに捨てる(起動時の値はコマンド行で渡す)。
@@ -37,7 +37,8 @@ class PtzVideoLink:
         self._ctx: zmq.Context | None = None
         self._sock: zmq.Socket | None = None
         self._sent: dict[str, str] = {}
-        self._overlay: str | None = None
+        self._overlay: tuple[str, str | None] | None = None
+        self.note: str | None = None  # 焼き込みの最後の行(app.py が live: の状態に合わせて変える)
         self._last_resync = 0.0
         self.commands_sent = 0
         self.command_errors = 0
@@ -101,11 +102,11 @@ class PtzVideoLink:
                     self._sent[key] = cmds[key]
                 else:
                     self._sent.pop(key, None)
-        line = self.overlay_line()
-        if force or line != self._overlay:
+        overlay = (self.overlay_line(), self.note)
+        if force or overlay != self._overlay:
             try:
-                write_overlay_text(self.cfg, self.cam, line)
-                self._overlay = line
+                write_overlay_text(self.cfg, self.cam, *overlay)
+                self._overlay = overlay
             except OSError as e:
                 log.warning("[%s] 焼き込みのテキストを書けません: %s", self.cam.name, e)
         self._drain_replies()

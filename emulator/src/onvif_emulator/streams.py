@@ -6,6 +6,14 @@ FFmpeg は 1 台につき 1 プロセスで、1 つの映像ソースから次�
   - sub : H.264(libx264、低解像度)                              → rtsp://127.0.0.1:8554/cam{n}/sub
   - スナップショット: 1 秒ごとの JPEG(ファイルを上書き)
 
+映像ソース(config.validate_source):
+  - testsrc 系: lavfi のテストパターン
+  - file:/path: -re -stream_loop -1 で実時間ループ
+  - live:名前: MediaMTX の live/名前(ブラウザが WHIP で送り込む)を RTSP で読む。来ていない間は代替映像
+    (cfg.live_fallback のテストパターン)を流す。切り替えは app.py が FFmpeg を再起動して行う
+  - stream:URL: 外部の RTSP などをそのまま読む
+  ライブの入力も fps フィルターで CFR にそろえるので、送り手のフレームレートの揺れは出力に出ない。
+
 タイムスタンプ:
   ソースは fps フィルターで CFR にそろえたあと、いったん壁時計(RTCTIME)を pts に入れて時刻を焼き込み、
   最後に setpts=N で 0 から単調増加する pts に振り直す。動画ファイルのループ(-stream_loop -1)で
@@ -42,8 +50,9 @@ PTZ_CROP_FILTER = "crop@ptz"  # zmq のコマンドの宛先
 
 def mediamtx_config(cfg: EmulatorConfig) -> dict:
     users: list[dict] = [
-        # 配信(publish)はコンテナ内の FFmpeg からだけ
-        {"user": "any", "pass": "", "ips": ["127.0.0.1", "::1"], "permissions": [{"action": "publish"}, {"action": "api"}]},
+        # 配信(publish)はコンテナ内から(FFmpeg と、UI が中継するブラウザの WHIP)だけ。live/ の読み出しも FFmpeg が使う
+        {"user": "any", "pass": "", "ips": ["127.0.0.1", "::1"],
+         "permissions": [{"action": "publish"}, {"action": "read"}, {"action": "api"}]},
     ]
     if cfg.rtsp_auth:
         for cam in cfg.cameras:
@@ -75,7 +84,14 @@ def mediamtx_config(cfg: EmulatorConfig) -> dict:
         "rtspAuthMethods": ["basic", "digest"],
         "rtmp": False,
         "hls": False,
-        "webrtc": False,
+        # ブラウザのカメラの取り込み(WHIP)。HTTP は UI が中継するので 127.0.0.1 だけ、ICE はブラウザから直接届く
+        "webrtc": True,
+        "webrtcAddress": f"127.0.0.1:{cfg.webrtc_port}",
+        "webrtcLocalUDPAddress": f":{cfg.webrtc_ice_port}",
+        "webrtcLocalTCPAddress": f":{cfg.webrtc_ice_port}",
+        "webrtcIPsFromInterfaces": True,
+        "webrtcAdditionalHosts": list(dict.fromkeys([*cfg.webrtc_hosts, *([cfg.advertise_host] if cfg.advertise_host else [])])),
+        "webrtcICEServers2": [],
         "srt": False,
         "moq": False,
         "paths": {"all_others": None},
@@ -108,12 +124,15 @@ def ptz_overlay_line(window: CropWindow, pan: float, tilt: float, zoom: float, m
     )
 
 
-def write_overlay_text(cfg: EmulatorConfig, cam: CameraConfig, ptz_line: str | None = None) -> Path:
+def write_overlay_text(
+    cfg: EmulatorConfig, cam: CameraConfig, ptz_line: str | None = None, note: str | None = None
+) -> Path:
     """drawtext の textfile。%{...} の展開は textfile の中身にも効く。
 
     1 フレームの pts(= 壁時計)から日付・時刻・ミリ秒を出すので、桁ごとにずれることがない。
     PTZ があるときは 4 行目に現在の pan / tilt / zoom を入れる。drawtext は毎フレーム読み直す(reload=1)ので、
     書き換えは一時ファイル + rename で行う(読みかけの中途半端な内容を出さない)。
+    note は最後の行(live: の映像が来ていないときの「NO SIGNAL」など)。
     """
     name = cam.name.replace("\\", "\\\\").replace("%", "%%")
     text = (
@@ -123,6 +142,8 @@ def write_overlay_text(cfg: EmulatorConfig, cam: CameraConfig, ptz_line: str | N
     )
     if ptz_line is not None:
         text += "\n" + ptz_line.replace("%", "%%")
+    if note:
+        text += "\n" + note.replace("\\", "\\\\").replace("%", "%%")
     path = overlay_text_path(cfg, cam)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(text)
@@ -150,16 +171,18 @@ def _even(v: float) -> int:
     return max(2, int(round(v / 2)) * 2)
 
 
-def ptz_source_size(cfg: EmulatorConfig, cam: CameraConfig) -> tuple[int, int]:
-    """疑似 PTZ の元映像(切り出す前)の解像度。縦横比は main と同じ。
+def ptz_source_size(cfg: EmulatorConfig, cam: CameraConfig, source: str | None = None) -> tuple[int, int]:
+    """疑似 PTZ の元映像(切り出す前)の解像度。縦横比は main と同じ。source は実際に流すソース(省略で cam.source)。
 
     テストパターンは main × source_scale。動画ファイルは元の解像度を main の縦横比に合わせて黒帯で広げた大きさ
-    (main より小さければ main の大きさ)。
+    (main より小さければ main の大きさ)。ライブの入力(live: / stream:)は事前に調べず main × source_scale
+    (調べるために接続すると、送り手やカメラを余計に開くことになる)。
     """
     m = cam.main
-    if cam.source.startswith("file:"):
+    source = source or cam.source
+    if source.startswith("file:"):
         ffprobe = str(Path(cfg.ffmpeg_bin).with_name("ffprobe")) if "/" in cfg.ffmpeg_bin else "ffprobe"
-        res = probe_resolution(ffprobe, cam.source[len("file:") :])
+        res = probe_resolution(ffprobe, source[len("file:") :])
         if res is not None:
             fw, fh = res
             # 元の解像度を含む、main と同じ縦横比の最小の大きさ
@@ -182,15 +205,35 @@ def ptz_crop_commands(window: CropWindow) -> dict[str, str]:
     }
 
 
-def _input_args(cam: CameraConfig, size: tuple[int, int]) -> list[str]:
-    src = cam.source
+def live_path(name: str) -> str:
+    """live:名前 の映像を受ける MediaMTX のパス。"""
+    return f"live/{name}"
+
+
+def live_url(cfg: EmulatorConfig, name: str) -> str:
+    return f"rtsp://127.0.0.1:{cfg.rtsp_port}/{live_path(name)}"
+
+
+# ライブの入力: 受信のバッファを減らし、送り手が止まったら 5 秒で終わらせる(監視が代替映像に切り替える)
+_LIVE_INPUT_ARGS = ["-fflags", "nobuffer", "-analyzeduration", "1000000", "-probesize", "1000000"]
+
+
+def _input_args(cfg: EmulatorConfig, cam: CameraConfig, src: str, size: tuple[int, int]) -> list[str]:
     m = cam.main
     if src.startswith("file:"):
         file = src[len("file:") :]
         # -re で実時間に合わせて読み、-stream_loop -1 で無限ループ。音声は使わない
         return ["-re", "-stream_loop", "-1", "-i", file]
+    if src.startswith("live:"):
+        url = live_url(cfg, src[len("live:") :])
+        return [*_LIVE_INPUT_ARGS, "-rtsp_transport", "tcp", "-timeout", "5000000", "-i", url]
+    if src.startswith("stream:"):
+        url = src[len("stream:") :]
+        if url.startswith(("rtsp://", "rtsps://")):
+            return [*_LIVE_INPUT_ARGS, "-rtsp_transport", "tcp", "-timeout", "5000000", "-i", url]
+        return [*_LIVE_INPUT_ARGS, "-rw_timeout", "5000000", "-i", url]
     if src not in TEST_SOURCES:
-        raise ValueError(f"{cam.name}: 不明な映像ソース {src!r}(testsrc 系か file:/path を指定)")
+        raise ValueError(f"{cam.name}: 不明な映像ソース {src!r}")
     return ["-re", "-f", "lavfi", "-i", f"{src}=size={size[0]}x{size[1]}:rate={m.fps}"]
 
 
@@ -222,16 +265,22 @@ def main_encoder_args(m: StreamSettings, preset: str) -> list[str]:
             "-x264-params", "repeat-headers=1:aud=1"]
 
 
-def ffmpeg_command(cfg: EmulatorConfig, cam: CameraConfig, window: CropWindow | None = None) -> list[str]:
-    """window は疑似 PTZ の現在の切り出し窓(FFmpeg の起動時の初期値。省略で等倍)。PTZ が無効なら使わない。"""
+def ffmpeg_command(
+    cfg: EmulatorConfig, cam: CameraConfig, window: CropWindow | None = None, source: str | None = None
+) -> list[str]:
+    """window は疑似 PTZ の現在の切り出し窓(FFmpeg の起動時の初期値。省略で等倍)。PTZ が無効なら使わない。
+
+    source は実際に流すソース(live: の映像が来ていないときの代替映像など)。省略で cam.source。
+    """
     m, s = cam.main, cam.sub
+    source_name = source or cam.source
     textfile = overlay_text_path(cfg, cam)
     font = cfg.font_file
     fontsize = max(16, m.height // 24)
     rtsp = f"rtsp://127.0.0.1:{cfg.rtsp_port}/{cam.path_prefix}"
 
     if cam.ptz.enabled:
-        sw, sh = ptz_source_size(cfg, cam)
+        sw, sh = ptz_source_size(cfg, cam, source_name)
         c = ptz_crop_commands(window or CropWindow(1.0, 0.5, 0.5))
         sock = ptz_zmq_path(cfg, cam)
         source = (
@@ -281,7 +330,7 @@ def ffmpeg_command(cfg: EmulatorConfig, cam: CameraConfig, window: CropWindow | 
         "-loglevel", "warning",
         "-progress", "pipe:1",
         "-stats_period", "5",
-        *_input_args(cam, (sw, sh)),
+        *_input_args(cfg, cam, source_name, (sw, sh)),
         "-filter_complex", prep,
         # ---- main(既定 H.265。カメラごとに H.264 も選べる)----
         "-map", "[main]",

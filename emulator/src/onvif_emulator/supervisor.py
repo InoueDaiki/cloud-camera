@@ -118,6 +118,7 @@ class ManagedProcess:
             log.info("[%s] 起動: %s", self.name, " ".join(argv))
             started = time.monotonic()
             self.last_progress = started
+            self.progress = {}  # 前のプロセスの frame / fps を残さない
             try:
                 self.proc = await asyncio.create_subprocess_exec(
                     *argv,

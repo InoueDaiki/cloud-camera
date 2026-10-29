@@ -36,7 +36,7 @@ COPY config.example.yaml ./
 RUN uv sync --frozen --no-dev
 
 ENV EMULATOR_RUNTIME_DIR=/run/onvif-emulator
-EXPOSE 8080-8089 8554 8000/udp 8001/udp 3702/udp
+EXPOSE 8080-8089 8090 8554 8000/udp 8001/udp 3702/udp 8189/udp 8189/tcp
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s \
   CMD curl -fsS "http://127.0.0.1:${EMULATOR_ONVIF_PORT:-8080}/healthz" >/dev/null || exit 1
 

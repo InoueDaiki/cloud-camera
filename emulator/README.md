@@ -8,9 +8,11 @@
 │ python -m onvif_emulator(asyncio、1 プロセス)    │
 │  ├ ONVIF SOAP(aiohttp)  :8080 cam1, :8081 cam2 … │
 │  ├ WS-Discovery           udp/3702(239.255.255.250)│
+│  ├ 操作画面               :8090(ソース切り替え、WHIP)│
 │  └ プロセス監視(再起動、ウォッチドッグ)         │
 │      ├ MediaMTX           :8554 RTSP(udp 8000/8001)│
-│      └ FFmpeg × 台数  testsrc / 動画ループ         │
+│      │                    WebRTC ICE 8189(udp/tcp)│
+│      └ FFmpeg × 台数  testsrc / 動画 / ライブ入力  │
 │          ├ 疑似 PTZ: 高解像度の元映像 → crop(zmq)│
 │          ├ main  H.265 libx265 → /cam{n}/main      │
 │          │       (main_codec=H264 で libx264)      │
@@ -34,6 +36,7 @@ EMULATOR_CAMERAS=4 docker compose -f emulator/compose.yaml up
 | RTSP | `rtsp://<host>:8554/cam{n}/main`(既定 H.265。`EMULATOR_MAIN_CODEC` で H.264)、`rtsp://<host>:8554/cam{n}/sub`(H.264) |
 | スナップショット | `http://<host>:{8080+n-1}/onvif/snapshot.jpg` |
 | 状態(JSON) | `http://<host>:8080/healthz`(全カメラの FFmpeg の fps、再起動回数など) |
+| 操作画面 | `http://localhost:8090/`(映像ソースの切り替え、ブラウザのカメラの取り込み。「操作画面とブラウザのカメラ」) |
 
 認証情報の既定は `admin` / `admin`。リポジトリ直下の `compose.yaml` からは `include: [emulator/compose.yaml]` で取り込む
 (サービス名 `emulator`。同じネットワークのコンテナから `http://emulator:8080/onvif/device_service` で届く)。
@@ -63,6 +66,15 @@ EMULATOR_CAMERAS=4 docker compose -f emulator/compose.yaml up
 
 ## 映像
 
+映像ソース(`source`。カメラごと。操作画面から実行中にも変えられる):
+
+| ソース | 内容 |
+| --- | --- |
+| `testsrc`、`testsrc2`、`smptebars`、`smptehdbars`、`rgbtestsrc`、`mandelbrot`、`life` | FFmpeg の lavfi のテストパターン |
+| `file:/media/xxx.mp4` | 動画ファイルを実時間でループ再生 |
+| `live:名前` | MediaMTX の `live/名前` に送り込まれた映像(ブラウザのカメラを WHIP で、など)。来ていない間は代替映像(`EMULATOR_LIVE_FALLBACK`、既定 `smptebars`)に「NO SIGNAL」を焼き込んで流す |
+| `stream:URL` | 外部の `rtsp://`、`rtsps://`、`rtmp://`、`srt://`、`udp://`、`http(s)://` を読む(ネットワークカメラの中継など) |
+
 - main: H.265(libx265)。VBR(CRF + `vbv-maxrate` で上限)、`keyint = min-keyint = fps × キーフレーム間隔`、`scenecut=0`、
   closed GOP、`repeat-headers=1`(途中から受信しても VPS/SPS/PPS が届く)、`-tune zerolatency`(B フレームなし)。
   カメラごとに `main_codec: H264`(`EMULATOR_MAIN_CODEC` / `EMULATOR_CAM{n}_MAIN_CODEC`)で H.264(libx264、同じ方式)にできる。
@@ -71,6 +83,9 @@ EMULATOR_CAMERAS=4 docker compose -f emulator/compose.yaml up
 - sub: H.264(libx264)、低解像度、GOP は main と同じ。
 - 時刻の焼き込み: フレームを作った時点の UTC(ミリ秒)、カメラ名、フレーム番号。1 フレームの壁時計(`RTCTIME`)から日付〜ミリ秒を
   まとめて出すので、桁ごとにずれない。遅延の計測は「受信側の時刻 − 焼き込まれた時刻」で行える(エンコードの遅延を含む)。
+- ライブの入力(`live:` / `stream:`): `-re` もループもなし。受信のバッファを減らし(`-fflags nobuffer`)、5 秒届かなければ
+  FFmpeg が終わる(`live:` は代替映像に、`stream:` は監視の再起動で読み直す)。送り手の解像度・フレームレートが揺れても、
+  fps フィルターと縮小・黒帯で main の設定にそろえるので、出力は変わらない。疑似 PTZ の元映像は main × `EMULATOR_PTZ_SOURCE_SCALE`。
 - 動画ファイル: `-re -stream_loop -1` で実時間ループ再生。fps フィルターで CFR にそろえてから `setpts=N` で振り直すので、
   ループの継ぎ目でも出力の pts は単調増加し、途切れない(結合テストで確認)。解像度が違う動画は main の解像度に縮小して黒帯で埋める。
 
@@ -184,10 +199,16 @@ pyzmq の DEALER ソケットで UNIX ドメインソケット(`{runtime_dir}/ca
 | `EMULATOR_ADVERTISE_HOST` | (自動) | XAddrs と URI に入れるホスト。未指定なら、SOAP はリクエストの Host ヘッダー、Discovery は応答先への経路の IP |
 | `EMULATOR_RTSP_AUTH` | false | true で RTSP の読み出しにカメラの認証情報(Basic / Digest)が必要 |
 | `EMULATOR_STREAMS` | true | false で MediaMTX と FFmpeg を起動しない(SOAP だけ) |
+| `EMULATOR_UI_PORT` | 8090 | 操作画面のポート(コンテナ内)。0 で無効。ホスト側は compose の `EMULATOR_UI_HOST_PORT`、公開するアドレスは `EMULATOR_UI_BIND`(既定 127.0.0.1) |
+| `EMULATOR_MEDIA_DIR` | /media | 操作画面に一覧を出す動画ファイルの置き場 |
+| `EMULATOR_LIVE_FALLBACK` | smptebars | `live:` の映像が来ていない間の代替映像(テストパターン) |
+| `EMULATOR_WEBRTC_ICE_PORT` | 8189 | WebRTC の ICE(UDP / TCP)。ホストとコンテナで同じ番号にする |
+| `EMULATOR_WEBRTC_HOSTS` | 127.0.0.1 | ICE の候補に載せるホスト(カンマ区切り。ブラウザから届く名前)。`EMULATOR_ADVERTISE_HOST` も足される |
+| `EMULATOR_WEBRTC_PORT` | 8889 | MediaMTX の WHIP(HTTP)。127.0.0.1 だけで待ち受け、操作画面が中継する |
 | `EMULATOR_AUTH_MAX_SKEW_S` | 0 | UsernameToken の Created の許容ずれ(秒)。0 で検査しない |
 | `EMULATOR_LOG_LEVEL` | INFO | |
 | `EMULATOR_USERNAME` / `EMULATOR_PASSWORD` | admin / admin | 認証情報 |
-| `EMULATOR_SOURCE` | testsrc | `testsrc`、`testsrc2`、`smptebars`、`smptehdbars`、`rgbtestsrc`、`mandelbrot`、`life`、`file:/media/xxx.mp4` |
+| `EMULATOR_SOURCE` | testsrc | 映像ソース(「映像」の表。テストパターン、`file:/media/xxx.mp4`、`live:名前`、`stream:URL`) |
 | `EMULATOR_WIDTH` / `EMULATOR_HEIGHT` | 1280 / 720 | main の解像度 |
 | `EMULATOR_FPS` | 15 | フレームレート(main と sub) |
 | `EMULATOR_MAIN_CODEC` | H265 | main のコーデック(`H265` / `H264`)。sub は常に H.264 |
@@ -205,6 +226,37 @@ pyzmq の DEALER ソケットで UNIX ドメインソケット(`{runtime_dir}/ca
 
 カメラ別は `EMULATOR_CAM2_SOURCE=file:/media/traffic_bangkok.mp4` のように `EMULATOR_CAM{n}_` を付ける(`_ONVIF_PORT`、`_PTZ` なども可)。
 YAML のキーは小文字(`ptz`、`ptz_max_zoom` など)。
+
+## 操作画面とブラウザのカメラ
+
+`http://localhost:8090/` を開くと、カメラごとのスナップショット・状態・RTSP / ONVIF の URL が見え、映像ソースを切り替えられる
+(テストパターン、`EMULATOR_MEDIA_DIR`(既定 `/media`)の動画、ブラウザのカメラ、外部ストリームの URL)。切り替えは FFmpeg の再起動で、
+配信が数秒途切れる。変更はメモリ上だけで、コンテナを再起動すると設定に戻る。
+
+「このブラウザのカメラを流す」で送り先のカメラを選んで「開始」すると、そのカメラのソースを `live:cam{n}` にして、ブラウザのカメラ
+(Mac の内蔵カメラなど)を WebRTC(WHIP)で送り込む。エッジなどからは、普通の ONVIF カメラとしてその映像が見える。
+
+```
+ブラウザ(http://localhost:8090)                 コンテナ
+ ├ 画面: ソースの切り替え ──── HTTP ─────→ 操作画面(aiohttp)→ FFmpeg を再起動
+ └ getUserMedia ─ WHIP(SDP)── HTTP ─────→ 操作画面 → MediaMTX(127.0.0.1:8889)の live/cam{n}/whip
+               └ 映像(SRTP)── ICE 8189 ─→ MediaMTX live/cam{n} → RTSP → FFmpeg → /cam{n}/main・sub
+```
+
+- Docker のコンテナからは Mac のカメラ(AVFoundation)を開けないので、ブラウザに開かせて送り込む。Linux でも同じ手順で使える。
+- WHIP の HTTP は操作画面が中継する(MediaMTX への配信はコンテナ内からに限ったまま、同じオリジンで送れる)。映像は ICE のポート
+  (既定 8189 の UDP / TCP)にブラウザから直接届く。ICE の候補には `EMULATOR_WEBRTC_HOSTS`(既定 `127.0.0.1`)を載せる。
+  ポートの番号は候補に載るので、ホストとコンテナで同じ番号にする(compose は `EMULATOR_WEBRTC_ICE_PORT` で両方変わる)。
+- ブラウザのカメラは安全なオリジンでしか使えないため、画面は `http://localhost:…` で開く(LAN の別の PC からは HTTP では使えない)。
+  compose は操作画面と ICE のポートを既定で 127.0.0.1 にだけ公開する(画面からソースを変えられるため)。LAN に出すときは
+  `EMULATOR_UI_BIND=0.0.0.0`。
+- タブを閉じるか「停止」すると、数秒で「NO SIGNAL」の代替映像に戻る。送り手が来ればまた自動で切り替わる。
+- 確かめ方: [tools/emulator-webcam-check](../tools/emulator-webcam-check)(Chromium の偽のカメラで、開始 → ライブに切り替わる →
+  フレームが進む → 停止で代替映像に戻る、を確かめる。Docker Desktop for Mac のポート転送越しにつながることを確認済み)。
+
+```sh
+cd tools/emulator-webcam-check && npm install && npm run check   # -- --camera 2、-- --headed、-- --keep も可
+```
 
 ## サンプル動画(物体検出の検証用)
 
@@ -246,7 +298,9 @@ cd emulator && mise exec -- uv run pytest
 | --- | --- |
 | `test_onvif.py` | Discovery(全台、EPR がカメラごとに別)→ 認証 → GetDeviceInformation → Media2 で H.265 プロファイル → GetStreamUri の一連の流れ、誤パスワード・誤ユーザーの拒否(Digest / Text)、Fault の形式、PRE_AUTH、Device / Media1 の各操作、strict な zeep での Media2 スキーマ検証 |
 | `test_media.py` | ffprobe で main が hevc・指定解像度、sub が h264・低解像度、キーフレーム間隔が設定どおり、pts が単調増加、スナップショット、Media2 の SetVideoEncoderConfiguration で GOP が 2 秒に変わること、動画ループの連続性、全プロセスの健全性 |
-| `test_units.py` | 設定の優先順位、UsernameToken の検証、FFmpeg / MediaMTX の設定生成 |
+| `test_units.py` | 設定の優先順位、UsernameToken の検証、映像ソースの書式、FFmpeg / MediaMTX の設定生成(ライブの入力、WebRTC) |
+| `test_ui.py` | 操作画面の API(状態、ソースの切り替えと検証、WHIP の名前の検証)。プロセス内起動でも動く |
+| `test_live.py` | 映像の来ていない `live:` が代替映像で配信を続け、再起動を繰り返さないこと、`stream:` で別の RTSP を中継できること |
 | `test_ptz.py` | onvif-zeep で PTZ の全操作、GetCapabilities / GetServices / Media / Media2 のプロファイル、速度上限付きの滑らかな移動、Timeout での自動停止、Stop、範囲の丸め、プリセット、ホーム、認証、公式 WSDL と strict な zeep でのスキーマ検証 |
 | `test_ptz_units.py` | 動きのシミュレーション(時計を差し替え)、切り出し窓、FFmpeg のコマンド、設定、PTZ 無効のカメラ |
 | `test_ptz_media.py` | PTZ で RTSP の映像が変わること(main / sub / スナップショットが同じ窓)、動かしている間も pts が単調・途切れない・キーフレーム間隔と解像度・コーデックが変わらない・FFmpeg が再起動しない、操作から映像反映までの遅延(`PTZ_SHOTS_DIR` を指定するとフレームの PNG と `ptz_latency.json` を書き出す) |
@@ -284,6 +338,8 @@ binding_name="{http://www.onvif.org/ver20/media/wsdl}Media2Binding")` のよう�
 - UsernameToken の Nonce の再利用(リプレイ)は検査しない。
 - スナップショットは認証なし。
 - 設定変更(SetVideoEncoderConfiguration)は保存しない。変更時は数秒(FFmpeg の終了待ち)配信が止まる。
+- `stream:` の入力が届かない間は配信が止まる(代替映像は `live:` だけ。FFmpeg は監視の再起動で読み直し続ける)。
+- ブラウザのカメラは音声を送らない(エミュレーターは音声を扱わない)。
 - RTSP の UDP 転送は Docker のポート転送越しだと届かないことがある。ホストから再生するときは TCP(`-rtsp_transport tcp`)を使う。
 
 ## ファイル
@@ -299,6 +355,7 @@ binding_name="{http://www.onvif.org/ver20/media/wsdl}Media2Binding")` のよう�
 | `src/onvif_emulator/discovery.py` | WS-Discovery |
 | `src/onvif_emulator/streams.py` | MediaMTX の設定、FFmpeg のコマンド |
 | `src/onvif_emulator/supervisor.py` | 子プロセスの監視と再起動 |
-| `src/onvif_emulator/app.py` | 全体の起動・停止、HTTP サーバー |
+| `src/onvif_emulator/app.py` | 全体の起動・停止、HTTP サーバー、`live:` の監視と代替映像への切り替え |
+| `src/onvif_emulator/ui.py`、`src/onvif_emulator/ui/index.html` | 操作画面(ソースの切り替え、WHIP の中継) |
 | `scripts/fetch_sample_media.py` | サンプル動画の取得 |
 | `scripts/vendor_wsdl.sh` | テスト用 WSDL の取り込み |

@@ -1,19 +1,26 @@
-"""エミュレーター本体: カメラごとの ONVIF HTTP サーバー、WS-Discovery、MediaMTX / FFmpeg の監視をまとめて起動する。"""
+"""エミュレーター本体: カメラごとの ONVIF HTTP サーバー、WS-Discovery、MediaMTX / FFmpeg の監視、操作画面をまとめて起動する。
+
+live: ソースのカメラは、MediaMTX の live/名前 に映像が来ているか(API の ready)を 1 秒ごとに見て、
+来ていれば live/名前 を、来ていなければ代替映像(cfg.live_fallback と「NO SIGNAL」の焼き込み)を流す。
+切り替えは FFmpeg の再起動で行う(数秒途切れる。出力の解像度・コーデック・GOP は変わらない)。
+"""
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import signal
 
+import aiohttp
 from aiohttp import web
 
-from .config import CameraConfig, EmulatorConfig
+from .config import CameraConfig, EmulatorConfig, validate_source
 from .discovery import DiscoveryServer
 from .ptz import PtzController
 from .services import CameraServices, RequestContext
 from .soap import NS, SoapFault, content_type, envelope, fault_envelope, parse_request
-from .streams import ffmpeg_command, snapshot_path, write_mediamtx_config, write_overlay_text
+from .streams import ffmpeg_command, live_path, snapshot_path, write_mediamtx_config, write_overlay_text
 from .supervisor import ManagedProcess, wait_tcp
 
 log = logging.getLogger(__name__)
@@ -26,6 +33,10 @@ def _request_host(request: web.Request, cfg: EmulatorConfig) -> str:
     if host.startswith("["):  # IPv6
         return host[: host.index("]") + 1]
     return host.rsplit(":", 1)[0] if ":" in host else host or "127.0.0.1"
+
+
+def _live_name(source: str) -> str | None:
+    return source[len("live:") :] if source.startswith("live:") else None
 
 
 class Emulator:
@@ -41,6 +52,12 @@ class Emulator:
         self.ptz_links: dict = {}  # index → PtzVideoLink(映像を出すときだけ)
         self.discovery: DiscoveryServer | None = None
         self.runners: list[web.AppRunner] = []
+        # live: の状態。active_source は FFmpeg を起動したときのソース(代替映像のときはそのテストパターン)
+        self.active_source: dict[int, str] = {}
+        self.live_ready: dict[str, bool] = {}
+        self._switching: set[int] = set()
+        self._http: aiohttp.ClientSession | None = None
+        self._live_task: asyncio.Task | None = None
 
     # ---- HTTP ----
 
@@ -102,10 +119,14 @@ class Emulator:
                     "commands_sent": link.commands_sent if link else 0,
                     "command_errors": link.command_errors if link else 0,
                 }
+            live = _live_name(cam.source)
             cams[cam.name] = {
+                "index": cam.index,
                 "path": cam.path_prefix,
                 "onvif_port": cam.onvif_port,
                 "source": cam.source,
+                "active_source": self.active_source.get(cam.index),
+                "live": {"path": live_path(live), "ready": self.live_ready.get(live, False)} if live else None,
                 "main": vars(cam.main),
                 "sub": vars(cam.sub),
                 "ffmpeg_running": bool(p and p.running),
@@ -128,6 +149,61 @@ class Emulator:
         if p is not None:
             asyncio.get_running_loop().create_task(p.restart())
 
+    def camera(self, index: int) -> CameraConfig:
+        for cam in self.cfg.cameras:
+            if cam.index == index:
+                return cam
+        raise KeyError(index)
+
+    async def set_source(self, index: int, source: str) -> CameraConfig:
+        """映像ソースを実行中に変える(メモリ上だけ。コンテナを再起動すると設定に戻る)。FFmpeg を再起動する。"""
+        cam = self.camera(index)
+        source = validate_source(source)
+        if source == cam.source:
+            return cam
+        log.info("%s: 映像ソースを %s → %s", cam.name, cam.source, source)
+        cam.source = source
+        p = self.ffmpeg.get(index)
+        if p is not None:
+            self._switching.add(index)
+            await p.restart()
+        return cam
+
+    async def _probe_live(self, name: str) -> bool:
+        """MediaMTX の live/名前 に映像が来ているか(API の paths/get の ready)。"""
+        assert self._http is not None
+        try:
+            async with self._http.get(f"http://127.0.0.1:9997/v3/paths/get/{live_path(name)}") as r:
+                ready = r.status == 200 and bool((await r.json()).get("ready"))
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            ready = False
+        if self.live_ready.get(name) != ready:
+            log.info("live/%s: %s", name, "映像あり" if ready else "映像なし")
+        self.live_ready[name] = ready
+        return ready
+
+    async def _choose_source(self, cam: CameraConfig) -> tuple[str, str | None]:
+        """FFmpeg に流させるソースと、焼き込みの注記。"""
+        live = _live_name(cam.source)
+        if live is None or await self._probe_live(live):
+            return cam.source, None
+        return self.cfg.live_fallback, f"NO SIGNAL  waiting for {live_path(live)}"
+
+    async def _watch_live(self) -> None:
+        """live: のカメラで、映像の有無と流しているソースが食い違ったら FFmpeg を再起動する。"""
+        while True:
+            await asyncio.sleep(1)
+            for cam in self.cfg.cameras:
+                live = _live_name(cam.source)
+                p = self.ffmpeg.get(cam.index)
+                if live is None or p is None or cam.index in self._switching:
+                    continue
+                ready = await self._probe_live(live)
+                showing_live = self.active_source.get(cam.index) == cam.source
+                if ready != showing_live:
+                    self._switching.add(cam.index)
+                    await p.restart()
+
     def _start_streams(self) -> None:
         cfg = self.cfg
         mtx_conf = write_mediamtx_config(cfg)
@@ -142,14 +218,19 @@ class Emulator:
                 self.ptz_links[cam.index] = link
 
             async def prepare(cam=cam, link=link) -> None:
-                write_overlay_text(cfg, cam, link.overlay_line() if link else None)
                 if not await wait_tcp("127.0.0.1", cfg.rtsp_port, timeout=30):
                     raise RuntimeError("MediaMTX の RTSP ポートが開きません")
+                source, note = await self._choose_source(cam)
+                self.active_source[cam.index] = source
+                self._switching.discard(cam.index)
+                if link is not None:
+                    link.note = note
+                write_overlay_text(cfg, cam, link.overlay_line() if link else None, note)
 
             def argv(cam=cam) -> list[str]:
                 # 再起動しても今の切り出し窓から始める
                 ptz = self.ptz.get(cam.index)
-                return ffmpeg_command(cfg, cam, ptz.window() if ptz else None)
+                return ffmpeg_command(cfg, cam, ptz.window() if ptz else None, self.active_source.get(cam.index))
 
             p = ManagedProcess(
                 f"ffmpeg-{cam.path_prefix}",
@@ -162,11 +243,13 @@ class Emulator:
             p.start()
             if link is not None:
                 link.start()
+        self._live_task = asyncio.create_task(self._watch_live(), name="watch-live")
 
     # ---- 起動・停止 ----
 
     async def start(self) -> None:
         self.cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
+        self._http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3))
         for cam in self.cfg.cameras:
             runner = web.AppRunner(self._make_app(cam), access_log=None)
             await runner.setup()
@@ -179,6 +262,14 @@ class Emulator:
             )
         if self.cfg.streams_enabled:
             self._start_streams()
+        if self.cfg.ui_port:
+            from .ui import make_ui_app
+
+            runner = web.AppRunner(make_ui_app(self), access_log=None)
+            await runner.setup()
+            await web.TCPSite(runner, "0.0.0.0", self.cfg.ui_port).start()
+            self.runners.append(runner)
+            log.info("操作画面 http://0.0.0.0:%d/", self.cfg.ui_port)
         if self.cfg.discovery_enabled:
             self.discovery = DiscoveryServer(self.cfg, lambda cam: self.services[cam.index].scope_uris())
             await self.discovery.start()
@@ -186,12 +277,18 @@ class Emulator:
     async def stop(self) -> None:
         if self.discovery:
             self.discovery.stop()
+        if self._live_task:
+            self._live_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._live_task
         await asyncio.gather(*(link.stop() for link in self.ptz_links.values()), return_exceptions=True)
         await asyncio.gather(*(p.stop() for p in self.ffmpeg.values()), return_exceptions=True)
         if self.mediamtx:
             await self.mediamtx.stop()
         for r in self.runners:
             await r.cleanup()
+        if self._http:
+            await self._http.close()
 
 
 async def run(cfg: EmulatorConfig) -> None:

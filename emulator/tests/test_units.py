@@ -8,9 +8,9 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from onvif_emulator.config import load_config
+from onvif_emulator.config import load_config, validate_source
 from onvif_emulator.soap import PASSWORD_DIGEST, PASSWORD_TEXT, verify_username_token
-from onvif_emulator.streams import ffmpeg_command, mediamtx_config
+from onvif_emulator.streams import ffmpeg_command, mediamtx_config, write_overlay_text
 
 
 def test_config_env_overrides(tmp_path):
@@ -80,5 +80,61 @@ def test_ffmpeg_command_gop_and_codecs(tmp_path):
 def test_mediamtx_auth():
     cfg = load_config(env={"EMULATOR_RTSP_AUTH": "true"})
     users = mediamtx_config(cfg)["authInternalUsers"]
-    readers = [u for u in users if any(p["action"] == "read" for p in u["permissions"])]
-    assert all(u["user"] == "admin" for u in readers)
+    # コンテナ内(127.0.0.1)は live: を読むために読み出しもできる。外からはカメラの認証情報が必要
+    readers = [u for u in users if any(p["action"] == "read" for p in u["permissions"]) and not u["ips"]]
+    assert readers and all(u["user"] == "admin" for u in readers)
+    local = [u for u in users if u["ips"]]
+    assert local and all(set(u["ips"]) <= {"127.0.0.1", "::1"} for u in local)
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["testsrc", "file:/media/a.mp4", "live:webcam", "live:cam_1-a", "stream:rtsp://10.0.0.5:554/stream1",
+     "stream:srt://host:9000?mode=caller"],
+)
+def test_validate_source_accepts(source):
+    assert validate_source(source) == source
+
+
+@pytest.mark.parametrize("source", ["", "file:", "live:", "live:a/b", "live:日本", "stream:/dev/video0", "nope"])
+def test_validate_source_rejects(source):
+    with pytest.raises(ValueError):
+        validate_source(source)
+
+
+def test_ffmpeg_command_live_and_stream(tmp_path):
+    cfg = load_config(env={"EMULATOR_CAMERAS": "1", "EMULATOR_SOURCE": "live:webcam", "EMULATOR_RUNTIME_DIR": str(tmp_path)})
+    cam = cfg.cameras[0]
+    cmd = ffmpeg_command(cfg, cam)
+    # ライブの入力は実時間待ち(-re)もループもしない。送り手が止まったら -timeout で終わる
+    assert cmd[cmd.index("-i") + 1] == "rtsp://127.0.0.1:8554/live/webcam"
+    assert "-re" not in cmd and "-stream_loop" not in cmd and "-timeout" in cmd
+    assert cmd[cmd.index("-filter_complex") + 1].startswith(f"[0:v]fps={cam.main.fps},")
+    # 映像が来ていない間は代替映像(テストパターン)を流す
+    fb = ffmpeg_command(cfg, cam, source=cfg.live_fallback)
+    assert fb[fb.index("-i") + 1].startswith("smptebars=") and "-re" in fb
+    st = ffmpeg_command(cfg, cam, source="stream:srt://10.0.0.5:9000")
+    inp = st[: st.index("-i") + 2]
+    assert inp[-1] == "srt://10.0.0.5:9000" and "-rw_timeout" in inp and "-rtsp_transport" not in inp
+
+
+def test_mediamtx_webrtc(tmp_path):
+    cfg = load_config(env={"EMULATOR_WEBRTC_HOSTS": "127.0.0.1, 192.168.1.50", "EMULATOR_ADVERTISE_HOST": "cam.local",
+                           "EMULATOR_WEBRTC_ICE_PORT": "8200"})
+    c = mediamtx_config(cfg)
+    assert c["webrtc"] is True
+    assert c["webrtcAddress"] == "127.0.0.1:8889"  # WHIP の HTTP は UI が中継する
+    assert c["webrtcLocalUDPAddress"] == ":8200" and c["webrtcLocalTCPAddress"] == ":8200"
+    assert c["webrtcAdditionalHosts"] == ["127.0.0.1", "192.168.1.50", "cam.local"]
+
+
+def test_live_fallback_must_be_pattern():
+    with pytest.raises(ValueError):
+        load_config(env={"EMULATOR_LIVE_FALLBACK": "file:/media/a.mp4"})
+
+
+def test_overlay_note(tmp_path):
+    cfg = load_config(env={"EMULATOR_CAMERAS": "1", "EMULATOR_RUNTIME_DIR": str(tmp_path)})
+    text = write_overlay_text(cfg, cfg.cameras[0], "PTZ pan +0.000", "NO SIGNAL 100%").read_text()
+    lines = text.splitlines()
+    assert lines[3] == "PTZ pan +0.000" and lines[4] == "NO SIGNAL 100%%"

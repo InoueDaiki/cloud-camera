@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ONVIF エミュレーター</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #5d6677; --line: #dfe3ea;
+    --accent: #2f6fde; --accent-text: #ffffff; --ok: #1f8a4c; --warn: #b26a00; --bad: #c43b3b;
+    --chip-ok: #e3f4ea; --chip-warn: #fdf0dc; --chip-bad: #fbe5e5; --chip-idle: #eceff3;
+    --shadow: 0 1px 2px rgba(20, 30, 50, .06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1b1f27; --text: #e6e9ef; --muted: #9aa3b2; --line: #2c323d;
+      --accent: #5b8ff0; --accent-text: #0d1117; --ok: #4cc283; --warn: #e3a64a; --bad: #ef7676;
+      --chip-ok: #173326; --chip-warn: #3a2c14; --chip-bad: #3b1d1d; --chip-idle: #262b35;
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.55 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  header { padding: 20px 24px 8px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  main { padding: 8px 24px 40px; display: grid; gap: 20px; max-width: 1400px; }
+  .muted { color: var(--muted); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; box-shadow: var(--shadow); }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+  label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+  select, input[type=text] { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 8px; min-width: 0; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    border-radius: 6px; padding: 6px 14px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  .chip { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--chip-idle); color: var(--muted); }
+  .chip.ok { background: var(--chip-ok); color: var(--ok); }
+  .chip.warn { background: var(--chip-warn); color: var(--warn); }
+  .chip.bad { background: var(--chip-bad); color: var(--bad); }
+  .webcam { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 360px); gap: 16px; align-items: start; }
+  .webcam video { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; object-fit: contain; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); gap: 16px; }
+  .cam { display: grid; gap: 10px; }
+  .cam-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .cam-head b { font-size: 15px; }
+  .shot { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; object-fit: contain; display: block; }
+  .src { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .src input { grid-column: 1 / -1; }
+  dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; margin: 0; font-size: 12px; }
+  dt { color: var(--muted); }
+  dd { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+  .msg { font-size: 12px; min-height: 1.4em; }
+  .msg.bad { color: var(--bad); }
+  @media (max-width: 760px) {
+    header, main { padding-left: 16px; padding-right: 16px; }
+    .webcam { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>ONVIF エミュレーター</h1>
+  <span id="server" class="chip">接続中…</span>
+</header>
+<main>
+  <section class="panel">
+    <h2>このブラウザのカメラを流す</h2>
+    <div class="webcam">
+      <div style="display:grid; gap:12px">
+        <p class="muted" style="margin:0">選んだエミュレーターのカメラの映像ソースを <code>live:</code> に切り替え、このブラウザのカメラ映像を WebRTC(WHIP)で送り込みます。
+          タブを閉じるか停止すると、そのカメラは「NO SIGNAL」の代替映像に戻ります。</p>
+        <div class="row">
+          <label>カメラデバイス<select id="device"><option value="">(既定のカメラ)</option></select></label>
+          <label>解像度<select id="res">
+            <option value="640x360">640×360</option>
+            <option value="1280x720" selected>1280×720</option>
+            <option value="1920x1080">1920×1080</option>
+          </select></label>
+          <label>送り先<select id="target"></select></label>
+          <button id="start" class="primary">開始</button>
+          <button id="stop" disabled>停止</button>
+        </div>
+        <div><span id="pubstate" class="chip">停止中</span> <span id="pubmsg" class="msg"></span></div>
+      </div>
+      <video id="preview" autoplay muted playsinline></video>
+    </div>
+  </section>
+
+  <section>
+    <h2>カメラ</h2>
+    <div id="cams" class="grid"></div>
+  </section>
+</main>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const STREAM = '__stream';
+let state = null;
+const cards = new Map();  // index → { el, dirty }
+let pub = null;           // { pc, stream, location, name }
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, opts);
+  if (!r.ok) {
+    let msg = `${r.status}`;
+    try { msg = (await r.json()).error || msg; } catch {}
+    throw new Error(msg);
+  }
+  return r.headers.get('Content-Type')?.includes('json') ? r.json() : r;
+}
+
+function host() { return location.hostname.includes(':') ? `[${location.hostname}]` : location.hostname; }
+
+function sourceLabel(src) {
+  if (src.startsWith('file:')) return '動画 ' + src.slice(5).split('/').pop();
+  if (src.startsWith('live:')) return 'ライブ ' + src.slice(5);
+  if (src.startsWith('stream:')) return '外部 ' + src.slice(7);
+  return 'テストパターン ' + src;
+}
+
+function camStatus(c) {
+  if (!c.ffmpeg_running) return ['bad', '停止'];
+  if (c.live && !c.live.ready) return ['warn', 'NO SIGNAL'];
+  if (c.live) return ['ok', 'ライブ受信中'];
+  return ['ok', '配信中'];
+}
+
+function buildOptions(sel, c) {
+  const s = state.sources;
+  const groups = [
+    ['テストパターン', s.patterns.map((p) => [p, p])],
+    ['動画ファイル', s.files.map((f) => ['file:' + f, f.split('/').pop()])],
+    ['ライブ', [[`live:${c.path}`, `ブラウザのカメラ(live:${c.path})`]]],
+  ];
+  // いまのソースが一覧にないとき(別名の live: や file: など)も選べるように
+  const known = new Set(groups.flatMap(([, xs]) => xs.map(([v]) => v)));
+  if (!known.has(c.source) && !c.source.startsWith('stream:')) groups.unshift(['現在', [[c.source, c.source]]]);
+  sel.replaceChildren();
+  for (const [label, xs] of groups) {
+    if (!xs.length) continue;
+    const g = document.createElement('optgroup');
+    g.label = label;
+    for (const [v, t] of xs) g.append(new Option(t, v));
+    sel.append(g);
+  }
+  const g = document.createElement('optgroup');
+  g.label = '外部';
+  g.append(new Option('ストリームの URL を指定…', STREAM));
+  sel.append(g);
+}
+
+function syncSourceInputs(card, c) {
+  const sel = $('select', card.el), input = $('input', card.el);
+  buildOptions(sel, c);
+  if (c.source.startsWith('stream:')) { sel.value = STREAM; input.value = c.source.slice(7); }
+  else { sel.value = c.source; input.value = ''; }
+  input.hidden = sel.value !== STREAM;
+}
+
+function makeCard(c) {
+  const el = document.createElement('article');
+  el.className = 'panel cam';
+  el.innerHTML = `
+    <div class="cam-head"><b></b><span class="chip"></span></div>
+    <img class="shot" alt="">
+    <div class="src">
+      <select aria-label="映像ソース"></select>
+      <button class="primary">切り替え</button>
+      <input type="text" placeholder="rtsp://… / srt://… / rtmp://…" hidden>
+    </div>
+    <div class="msg"></div>
+    <dl></dl>`;
+  const card = { el, dirty: false };
+  const sel = $('select', el), input = $('input', el), btn = $('button', el), msg = $('.msg', el);
+  sel.addEventListener('change', () => { card.dirty = true; input.hidden = sel.value !== STREAM; if (!input.hidden) input.focus(); });
+  input.addEventListener('input', () => { card.dirty = true; });
+  btn.addEventListener('click', async () => {
+    const source = sel.value === STREAM ? 'stream:' + input.value.trim() : sel.value;
+    btn.disabled = true; msg.className = 'msg'; msg.textContent = '切り替え中…';
+    try {
+      await setSource(c.index, source);
+      card.dirty = false; msg.textContent = '切り替えました(数秒途切れます)';
+    } catch (e) { msg.className = 'msg bad'; msg.textContent = e.message; }
+    btn.disabled = false;
+  });
+  return card;
+}
+
+function render() {
+  const root = $('#cams');
+  for (const c of state.cameras) {
+    let card = cards.get(c.index);
+    if (!card) { card = makeCard(c); cards.set(c.index, card); root.append(card.el); syncSourceInputs(card, c); }
+    else if (!card.dirty) syncSourceInputs(card, c);
+    const el = card.el;
+    $('.cam-head b', el).textContent = `${c.name} `;
+    const [cls, text] = camStatus(c);
+    const chip = $('.cam-head .chip', el);
+    chip.className = `chip ${cls}`; chip.textContent = text;
+    const h = host(), rtsp = `rtsp://${h}:${state.rtsp_port}/${c.path}`;
+    const active = c.active_source && c.active_source !== c.source ? ` → 代替 ${c.active_source}` : '';
+    const rows = [
+      ['ソース', sourceLabel(c.source) + active],
+      ['main', `${rtsp}/main(${c.main.codec} ${c.main.width}×${c.main.height}@${c.main.fps})`],
+      ['sub', `${rtsp}/sub(${c.sub.codec} ${c.sub.width}×${c.sub.height})`],
+      ['ONVIF', `http://${h}:${c.onvif_port}/onvif/device_service`],
+      ['状態', `fps ${c.fps ?? '-'} / 再起動 ${c.ffmpeg_restarts} 回`],
+    ];
+    $('dl', el).replaceChildren(...rows.flatMap(([k, v]) => {
+      const dt = document.createElement('dt'), dd = document.createElement('dd');
+      dt.textContent = k; dd.textContent = v; return [dt, dd];
+    }));
+  }
+  const target = $('#target'), cur = target.value;
+  target.replaceChildren(...state.cameras.map((c) => new Option(`${c.name}(${c.path})`, c.index)));
+  if (cur) target.value = cur;
+}
+
+async function refresh() {
+  try {
+    state = await api('/api/state');
+    const s = $('#server');
+    s.className = `chip ${state.mediamtx_running ? 'ok' : state.streams_enabled ? 'bad' : ''}`;
+    s.textContent = state.streams_enabled ? (state.mediamtx_running ? 'MediaMTX 稼働中' : 'MediaMTX 停止') : '映像なし(SOAP のみ)';
+    render();
+  } catch (e) {
+    $('#server').className = 'chip bad'; $('#server').textContent = 'エミュレーターに接続できません';
+  }
+}
+
+function refreshShots() {
+  if (document.hidden) return;
+  for (const [index, card] of cards) {
+    const img = $('img', card.el);
+    const next = new Image();
+    next.onload = () => { img.src = next.src; };
+    next.src = `/api/cameras/${index}/snapshot.jpg?t=${Date.now()}`;
+  }
+}
+
+async function setSource(index, source) {
+  await api(`/api/cameras/${index}/source`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source }),
+  });
+  await refresh();
+}
+
+// ---- ブラウザのカメラ(WHIP)----
+
+function setPub(cls, text, msg = '') {
+  $('#pubstate').className = `chip ${cls}`; $('#pubstate').textContent = text;
+  $('#pubmsg').className = cls === 'bad' ? 'msg bad' : 'msg'; $('#pubmsg').textContent = msg;
+}
+
+async function listDevices() {
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+  const sel = $('#device'), cur = sel.value;
+  sel.replaceChildren(new Option('(既定のカメラ)', ''), ...devs.map((d, i) => new Option(d.label || `カメラ ${i + 1}`, d.deviceId)));
+  if (cur) sel.value = cur;
+}
+
+function waitIce(pc, ms = 2000) {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, ms);
+    pc.addEventListener('icegatheringstatechange', () => {
+      if (pc.iceGatheringState === 'complete') { clearTimeout(t); resolve(); }
+    });
+  });
+}
+
+async function startPublish() {
+  const cam = state.cameras.find((c) => String(c.index) === $('#target').value);
+  if (!cam) return;
+  const [w, h] = $('#res').value.split('x').map(Number);
+  $('#start').disabled = true;
+  setPub('', '準備中', 'カメラを開いています…');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: 30 },
+        ...($('#device').value ? { deviceId: { exact: $('#device').value } } : {}),
+      },
+    });
+    $('#preview').srcObject = stream;
+    listDevices().catch(() => {});
+    const pc = new RTCPeerConnection();
+    pub = { pc, stream, location: null, name: cam.path };
+    for (const track of stream.getVideoTracks()) {
+      pc.addTransceiver(track, { direction: 'sendonly', sendEncodings: [{ maxBitrate: 6_000_000 }] });
+    }
+    pc.addEventListener('connectionstatechange', () => {
+      const s = pc.connectionState;
+      if (s === 'connected') setPub('ok', '送信中', `${cam.name} に送っています(live:${cam.path})`);
+      else if (s === 'failed') setPub('bad', '失敗', 'WebRTC の接続に失敗しました。ICE のポート(既定 8189 の UDP / TCP)が公開されているか確認してください');
+      else if (s === 'disconnected') setPub('warn', '切断', '再接続を待っています…');
+    });
+    await pc.setLocalDescription(await pc.createOffer());
+    await waitIce(pc);
+    setPub('', '接続中', 'WHIP で接続しています…');
+    await setSource(cam.index, `live:${cam.path}`);
+    const r = await fetch(`/whip/${encodeURIComponent(cam.path)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/sdp' }, body: pc.localDescription.sdp,
+    });
+    if (r.status !== 201) throw new Error(`WHIP ${r.status}: ${(await r.text()).trim()}`);
+    pub.location = r.headers.get('Location');
+    await pc.setRemoteDescription({ type: 'answer', sdp: await r.text() });
+    $('#stop').disabled = false;
+  } catch (e) {
+    await stopPublish();
+    setPub('bad', '失敗', e.name === 'NotAllowedError' ? 'カメラの使用が許可されませんでした' : e.message);
+  }
+}
+
+async function stopPublish() {
+  const p = pub; pub = null;
+  if (p) {
+    // セッションを先に終わらせてから閉じる(先に閉じると MediaMTX 側のセッションが消えて DELETE が 404 になる)
+    if (p.location) await fetch(p.location, { method: 'DELETE', signal: AbortSignal.timeout(3000) }).catch(() => {});
+    p.pc.close();
+    p.stream.getTracks().forEach((t) => t.stop());
+  }
+  $('#preview').srcObject = null;
+  $('#start').disabled = false; $('#stop').disabled = true;
+  setPub('', '停止中');
+}
+
+$('#start').addEventListener('click', startPublish);
+$('#stop').addEventListener('click', stopPublish);
+addEventListener('pagehide', () => {
+  if (pub?.location) fetch(pub.location, { method: 'DELETE', keepalive: true });
+});
+
+if (!window.isSecureContext || !navigator.mediaDevices) {
+  $('#start').disabled = true;
+  setPub('bad', '使えません', 'ブラウザのカメラは安全なオリジンでしか使えません。http://localhost:… で開いてください');
+} else {
+  listDevices().catch(() => {});
+}
+
+refresh();
+setInterval(refresh, 1500);
+setInterval(refreshShots, 1000);
+document.addEventListener('visibilitychange', refreshShots);
+</script>
+</body>
+</html>

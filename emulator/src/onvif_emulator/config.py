@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -85,7 +86,7 @@ class CameraConfig:
     name: str
     username: str
     password: str
-    source: str  # testsrc / testsrc2 / smptebars / file:/path/to.mp4
+    source: str  # testsrc / testsrc2 / smptebars / file:/path/to.mp4 / live:名前 / stream:URL。UI から実行中に変わる
     main: StreamSettings
     sub: StreamSettings
     onvif_port: int
@@ -130,6 +131,13 @@ class EmulatorConfig:
     ffmpeg_bin: str = "ffmpeg"
     font_file: str = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
     auth_max_skew_s: int = 0  # UsernameToken の Created の許容ずれ(秒)。0 で検査しない
+    ui_port: int = 8090  # 操作画面(ソースの切り替え、ブラウザのカメラの取り込み)。0 で無効
+    media_dir: Path = field(default_factory=lambda: Path("/media"))  # UI に一覧を出す動画ファイルの置き場
+    live_fallback: str = "smptebars"  # live: の映像が来ていない間に代わりに流すテストパターン
+    webrtc_port: int = 8889  # MediaMTX の WHIP(HTTP)。127.0.0.1 だけで待ち受け、UI が中継する
+    webrtc_ice_port: int = 8189  # WebRTC の ICE(UDP / TCP)。ブラウザから直接届く必要がある
+    # ICE の候補に入れるホスト(ブラウザから MediaMTX に届く名前)。Docker Desktop ではポートを公開した 127.0.0.1
+    webrtc_hosts: list[str] = field(default_factory=lambda: ["127.0.0.1"])
     log_level: str = "INFO"
 
 
@@ -206,6 +214,12 @@ _GLOBAL_ENV_KEYS: dict[str, tuple[str, type]] = {
     "FFMPEG_BIN": ("ffmpeg_bin", str),
     "FONT_FILE": ("font_file", str),
     "AUTH_MAX_SKEW_S": ("auth_max_skew_s", int),
+    "UI_PORT": ("ui_port", int),
+    "MEDIA_DIR": ("media_dir", Path),
+    "LIVE_FALLBACK": ("live_fallback", str),
+    "WEBRTC_PORT": ("webrtc_port", int),
+    "WEBRTC_ICE_PORT": ("webrtc_ice_port", int),
+    "WEBRTC_HOSTS": ("webrtc_hosts", list),
     "LOG_LEVEL": ("log_level", str),
 }
 
@@ -214,6 +228,35 @@ DEFAULT_CAMERA_COUNT = 2
 
 # lavfi のテストパターン名
 TEST_SOURCES = {"testsrc", "testsrc2", "smptebars", "smptehdbars", "rgbtestsrc", "mandelbrot", "life"}
+
+# stream: で読めるプロトコル
+STREAM_SCHEMES = ("rtsp://", "rtsps://", "rtmp://", "srt://", "udp://", "http://", "https://")
+
+LIVE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def validate_source(source: str) -> str:
+    """映像ソースの書式を確かめて返す。
+
+    - testsrc 系: FFmpeg の lavfi のテストパターン
+    - file:/path: 動画ファイルを実時間でループ再生
+    - live:名前: MediaMTX の live/名前 に送り込まれた映像(ブラウザのカメラを WHIP で、など)。来ていない間は代替映像
+    - stream:URL: 外部の RTSP / RTMP / SRT などを読む(ネットワークカメラの中継など)
+    """
+    s = str(source).strip()
+    if s in TEST_SOURCES:
+        return s
+    if s.startswith("file:") and len(s) > len("file:"):
+        return s
+    if s.startswith("live:"):
+        if not LIVE_NAME_RE.match(s[len("live:") :]):
+            raise ValueError(f"live: の名前は英数字・_・- の 64 文字までにしてください({s!r})")
+        return s
+    if s.startswith("stream:"):
+        if not s[len("stream:") :].startswith(STREAM_SCHEMES):
+            raise ValueError(f"stream: の URL は {', '.join(STREAM_SCHEMES)} のどれかで始めてください({s!r})")
+        return s
+    raise ValueError(f"不明な映像ソース {s!r}({sorted(TEST_SOURCES)}、file:/path、live:名前、stream:URL)")
 
 
 def _to_bool(v: Any) -> bool:
@@ -227,6 +270,9 @@ def _convert(v: Any, typ: type) -> Any:
         return _to_bool(v)
     if typ is Path:
         return Path(v)
+    if typ is list:
+        items = v if isinstance(v, list) else str(v).split(",")
+        return [str(x).strip() for x in items if str(x).strip()]
     return typ(v)
 
 
@@ -244,9 +290,10 @@ def _build_camera(index: int, values: dict[str, Any], base_port: int) -> CameraC
     name = v.get("name") or f"cam-{index:03d}"
     fps = int(v["fps"])
     gov = max(1, round(fps * float(v["keyframe_interval_s"])))
-    source = str(v["source"])
-    if not source.startswith("file:") and source not in TEST_SOURCES:
-        raise ValueError(f"{name}: 不明な映像ソース {source!r}({sorted(TEST_SOURCES)} か file:/path)")
+    try:
+        source = validate_source(v["source"])
+    except ValueError as e:
+        raise ValueError(f"{name}: {e}") from None
     serial = hashlib.sha1(name.encode()).hexdigest()[:12].upper()
     ptz = PtzSettings(
         enabled=_to_bool(v["ptz"]),
@@ -349,5 +396,8 @@ def load_config(path: str | Path | None = None, env: dict[str, str] | None = Non
     ports = [c.onvif_port for c in cameras]
     if len(set(ports)) != len(ports):
         raise ValueError(f"ONVIF ポートが重複しています: {ports}")
+
+    if glob.get("live_fallback", "smptebars") not in TEST_SOURCES:
+        raise ValueError(f"live_fallback はテストパターン({sorted(TEST_SOURCES)})にしてください")
 
     return EmulatorConfig(cameras=cameras, **glob)

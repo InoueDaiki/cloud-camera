@@ -172,8 +172,14 @@ def test_file_loop_is_continuous(target: Target):
 
 def test_processes_healthy(target: Target):
     """全カメラの FFmpeg が動いていて、異常終了による再起動が起きていない。"""
-    with urllib.request.urlopen(f"http://{target.host}:{target.onvif_port}/healthz", timeout=5) as r:
-        health = json.load(r)
+    def fetch():
+        with urllib.request.urlopen(f"http://{target.host}:{target.onvif_port}/healthz", timeout=5) as r:
+            h = json.load(r)
+        # 直前のテストで再起動したカメラは、次の進捗の報告(5 秒ごと)までは speed が空
+        return h if all(c["speed"] for c in h["cameras"].values()) else None
+
+    health = wait_until(fetch, 15, 1)
+    assert health, "FFmpeg の進捗が報告されません"
     assert health["mediamtx_running"]
     for name, c in health["cameras"].items():
         assert c["ffmpeg_running"], name
