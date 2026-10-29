@@ -17,7 +17,7 @@ Raspberry Pi 4(linux/arm64)向けで、Mac(Apple Silicon の Docker)でもその
 | `Dockerfile` | マルチステージ。producer-sdk-cpp **v3.6.0**(producer-c v1.6.2)の kvssink をビルドし、必要な GStreamer プラグインの .so だけを実行イメージに入れる(Debian trixie、約 260 MB) |
 | `agent/cc_edge/agent.py` | 本体。シャドウ(またはローカル設定)の差分適用、reported、status(30 秒)、cmd、discovery |
 | `agent/cc_edge/iot.py` | AWS IoT Device SDK v2(MQTT5)。LWT、再接続ごとの再購読 |
-| `agent/cc_edge/onvif.py` | 標準ライブラリだけの ONVIF クライアント。WS-Discovery、WS-Security Digest、Media2 で H.265 を自動選択(`prefer_codec` で H.264 優先にも)、GetStreamUri |
+| `agent/cc_edge/onvif.py` | 標準ライブラリだけの ONVIF クライアント。WS-Discovery、WS-Security Digest、Media2 で H.265 を自動選択(`prefer_codec` で H.264 優先にも)、GetStreamUri、SetVideoEncoderConfiguration(desired の `codec` と `encoder`) |
 | `agent/cc_edge/ptz.py` | PTZ。ONVIF PTZ クライアント(GetServices で XAddr、プロファイルの PTZConfiguration、各操作)、cmd `ptz` の処理、`{p}/{gw}/ptz` への結果、シャドウの `reported.cameras.{id}.ptz` |
 | `agent/cc_edge/pipeline.py` | パイプラインの仕様と、子プロセスの監視・バックオフ付き再起動 |
 | `agent/cc_edge/webrtc.py` | KVS WebRTC のライブ。カメラごとに master(`ccWebrtcMaster`、[webrtc/](webrtc/))を子プロセスで起動・監視し、reported と status に視聴者数と送信量を載せる |

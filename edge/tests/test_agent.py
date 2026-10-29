@@ -12,7 +12,7 @@ CAM = {"onvif_url": "http://emulator:8080/onvif/device_service", "username": "ad
 
 def test_diff_new_and_removed():
     plan = diff_cameras({"cam-002": CAM}, {"cam-001": CAM})
-    assert plan == {"start": ["cam-001"], "stop": [], "restart": [], "remove": ["cam-002"]}
+    assert plan == {"start": ["cam-001"], "stop": [], "restart": [], "remove": ["cam-002"], "encoder": []}
 
 
 def test_diff_streaming_toggle():
@@ -20,7 +20,7 @@ def test_diff_streaming_toggle():
     assert diff_cameras({"cam-001": CAM}, {"cam-001": off})["stop"] == ["cam-001"]
     assert diff_cameras({"cam-001": off}, {"cam-001": CAM})["start"] == ["cam-001"]
     # 新規で streaming=false なら起動しない
-    assert diff_cameras({}, {"cam-001": off}) == {"start": [], "stop": [], "restart": [], "remove": []}
+    assert diff_cameras({}, {"cam-001": off}) == {"start": [], "stop": [], "restart": [], "remove": [], "encoder": []}
 
 
 def test_diff_restart_on_config_change():
@@ -30,7 +30,22 @@ def test_diff_restart_on_config_change():
     prefer = {**CAM, "prefer_codec": "H264"}
     assert diff_cameras({"cam-001": CAM}, {"cam-001": prefer})["restart"] == ["cam-001"]
     assert diff_cameras({"cam-001": CAM}, {"cam-001": dict(CAM)}) == {
-        "start": [], "stop": [], "restart": [], "remove": []}
+        "start": [], "stop": [], "restart": [], "remove": [], "encoder": []}
+
+
+def test_diff_encoder_only_does_not_restart():
+    enc = {**CAM, "encoder": {"quality": 60, "bitrate_limit_kbps": 4000}}
+    plan = diff_cameras({"cam-001": CAM}, {"cam-001": enc})
+    assert plan["encoder"] == ["cam-001"] and plan["restart"] == []
+    more = {**CAM, "encoder": {"quality": 60, "bitrate_limit_kbps": 5000}}
+    assert diff_cameras({"cam-001": enc}, {"cam-001": more})["encoder"] == ["cam-001"]
+    assert diff_cameras({"cam-001": enc}, {"cam-001": dict(enc)})["encoder"] == []
+    # encoder を消してもカメラの設定は戻さない(今の値のまま)
+    assert diff_cameras({"cam-001": enc}, {"cam-001": CAM})["encoder"] == []
+    # 他の設定も変わったら作り直し(resolve で encoder も設定する)
+    both = {**more, "codec": "H264"}
+    plan = diff_cameras({"cam-001": enc}, {"cam-001": both})
+    assert plan["restart"] == ["cam-001"] and plan["encoder"] == []
 
 
 def test_config_env_overrides_file(tmp_path):

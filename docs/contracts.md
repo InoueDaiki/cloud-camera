@@ -174,16 +174,31 @@ Scheduler からの入力は `{"camera_id": "cam-001"}`。カメラごとに 1 �
   "profile_token": null,
   "prefer_codec": null,
   "codec": null,
+  "encoder": {"quality": 60, "bitrate_limit_kbps": 4000, "rate_control": "VBR"},
   "streaming": true,
   "webrtc": {"enabled": true}
 }}}}}
 ```
 
-`reported` はエッジが実際の状態(`streaming`、`rtsp_url`、`codec`(`H265` / `H264`)、`codec_error`、`resolution`、`error`)を返す。`profile_token` が null なら `prefer_codec`(`H265` / `H264`。null ならエッジの `CC_PREFER_CODEC`、既定 `H265`)のプロファイルを自動選択し、なければもう一方のコーデックを使う(再エンコードしない)。
+`reported` はエッジが実際の状態(`streaming`、`rtsp_url`、`codec`(`H265` / `H264`)、`codec_error`、`encoder`、`encoder_error`、`resolution`、`error`)を返す。`profile_token` が null なら `prefer_codec`(`H265` / `H264`。null ならエッジの `CC_PREFER_CODEC`、既定 `H265`)のプロファイルを自動選択し、なければもう一方のコーデックを使う(再エンコードしない)。
 desired の `codec`(`H265` / `H264`、ビューワーの「映像形式」)は、ONVIF のカメラなら **カメラのエンコーダーをその形式に切り替える**:
 対象のプロファイル(`profile_token`、なければ最大解像度)の Encoding を Media2 の SetVideoEncoderConfiguration で変え、
 パイプラインを組み直す(配信は数秒途切れる)。変えられなければその形式のプロファイルを選び、それもなければもう一方のまま送り、
 理由を `reported.codec_error` に書く。`codec` があれば `prefer_codec` より優先する。
+desired の `encoder` は、選んだプロファイルのエンコーダーの設定(Media2 の SetVideoEncoderConfiguration)。どの項目も省略でき、
+省略した項目と、`encoder` を消したときはカメラの今の値のまま(戻さない):
+
+| キー | 内容 |
+| --- | --- |
+| `quality` | ONVIF の Quality。範囲と意味はカメラの機種ごとに違う(GetVideoEncoderConfigurationOptions の QualityRange。エミュレーターは 0〜100 → CRF 40〜20) |
+| `bitrate_limit_kbps` | RateControl の BitrateLimit。VBR では上限、CBR では目標 |
+| `rate_control` | `VBR` / `CBR`(RateControl の ConstantBitRate 属性)。カメラが CBR に対応していなければ変わらない(reported で分かる) |
+
+`encoder` だけの変更ではパイプラインを作り直さない(カメラがエンコーダーを作り直して RTSP が切れたら、いつもの再接続でつなぎ直す。
+エミュレーターは FFmpeg を再起動するので数秒切れる)。他の設定と一緒に変わったときや起動時は、ONVIF でプロファイルを取るときに設定する。
+エッジは `reported.cameras.{id}.encoder` に今の値(`quality`、`bitrate_limit_kbps`、`rate_control`、`framerate`、`gov_length`。
+Media2 のプロファイルから読む。分からなければ null)を、設定できなかったら理由を `reported.encoder_error` に返す。
+値の目安は [codec.md](codec.md)。
 desired に `rtsp_url`(と `codec`)を書くと ONVIF を使わずにその URL を直接使う(検証用。このときの `codec` は RTSP の形式の申告)。
 シャドウは null を書くとキーを消すので、`error` などが null のときはキーがない(読む側は「ない = null」として扱う)。
 
@@ -269,6 +284,7 @@ status の `cameras.*.webrtc`(KVS WebRTC のライブ。値は master が 10 秒
 | `GET /api/cameras` | カメラ一覧と状態(シャドウの reported、処理済み位置) |
 | `PUT /api/cameras/{id}/streaming` | `{"streaming": bool}` でシャドウの desired を更新 |
 | `PUT /api/cameras/{id}/codec` | `{"codec": "H265" \| "H264"}`(`H.265`、`HEVC` なども受ける)でシャドウの desired の `codec` を更新。`{"camera_id", "codec", "version"}` |
+| `PUT /api/cameras/{id}/encoder` | `{"quality": 数値, "bitrate_limit_kbps": 正の整数, "rate_control": "VBR" \| "CBR"}` の 1 つ以上(null でその項目を消す)で、シャドウの desired の `encoder` の書いた項目だけを更新。`{"camera_id", "encoder", "version"}` |
 | `GET /api/cameras/{id}/timeline?from=&to=` | 録画範囲。レスポンス下記 |
 | `GET /api/cameras/{id}/vod.m3u8?from=&to=` | S3 退避済み区間を連結した HLS プレイリスト(区間ごとに `EXT-X-DISCONTINUITY`、`EXT-X-MAP`、`EXT-X-PROGRAM-DATE-TIME`)。セグメントの URI は `/media/...`。区間の途中で映像形式が変わった区間は部分(`hls.sections`)ごとに同じ 3 つを入れる。メディアプレイリストなので `CODECS` 属性はなく、プレーヤーは各 `EXT-X-MAP` の init から形式を読む(H.265 と H.264 が混ざってよい) |
 | `GET /api/cameras/{id}/kvs-hls?mode=LIVE\|ON_DEMAND&from=&to=` | KVS の HLS セッション URL(`{"url", "expires_at"}`)。fMP4 を指定 |

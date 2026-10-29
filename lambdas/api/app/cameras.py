@@ -1,4 +1,4 @@
-"""GET /api/cameras と PUT /api/cameras/{id}/streaming、/codec(IoT のクラシックシャドウ)。"""
+"""GET /api/cameras と PUT /api/cameras/{id}/streaming、/codec、/encoder(IoT のクラシックシャドウ)。"""
 
 from __future__ import annotations
 
@@ -117,6 +117,41 @@ def set_codec(cfg: Config, camera_id: str, body: object) -> dict:
         raise bad_request('ボディは {"codec": "H265"|"H264"} にしてください')
     result = _update_desired(cfg, camera_id, {"codec": codec})
     return {"camera_id": camera_id, "codec": codec, "version": result.get("version")}
+
+
+RATE_CONTROLS = ("VBR", "CBR")
+_ENCODER_USAGE = ('ボディは {"quality": 数値, "bitrate_limit_kbps": 正の整数, "rate_control": "VBR"|"CBR"} '
+                  "の 1 つ以上にしてください(null でその項目を消す)")
+
+
+def _number(v: object) -> bool:
+    return isinstance(v, int | float) and not isinstance(v, bool)
+
+
+def set_encoder(cfg: Config, camera_id: str, body: object) -> dict:
+    """エンコーダーの設定(ONVIF の Quality、ビットレート上限、VBR / CBR)をシャドウの desired.cameras.{id}.encoder に書く。
+    書いた項目だけが変わる(シャドウは入れ子のオブジェクトを合わせる)。エッジがパイプラインを作り直さずに
+    カメラへ設定し、reported.encoder に実際の値を返す(docs/codec.md)。"""
+    keys = ("quality", "bitrate_limit_kbps", "rate_control")
+    if not isinstance(body, dict) or not body or set(body) - set(keys):
+        raise bad_request(_ENCODER_USAGE)
+    fields: dict = {}
+    for k in keys:
+        if k not in body:
+            continue
+        v = body[k]
+        if v is None:
+            fields[k] = None
+        elif k == "quality" and _number(v) and v >= 0:
+            fields[k] = v
+        elif k == "bitrate_limit_kbps" and _number(v) and v > 0 and float(v).is_integer():
+            fields[k] = int(v)
+        elif k == "rate_control" and isinstance(v, str) and v.strip().upper() in RATE_CONTROLS:
+            fields[k] = v.strip().upper()
+        else:
+            raise bad_request(_ENCODER_USAGE)
+    result = _update_desired(cfg, camera_id, {"encoder": fields})
+    return {"camera_id": camera_id, "encoder": fields, "version": result.get("version")}
 
 
 def set_streaming(cfg: Config, camera_id: str, body: object) -> dict:

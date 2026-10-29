@@ -23,7 +23,7 @@ def utc_now() -> str:
 
 
 def _conf_key(conf: dict) -> str:
-    """パイプラインの作り直しが要る設定だけを比較する(streaming は別に扱う)。"""
+    """パイプラインの作り直しが要る設定だけを比較する(streaming、webrtc、encoder は別に扱う)。"""
     keys = ("onvif_url", "username", "password", "profile_token", "prefer_codec", "rtsp_url", "codec")
     return json.dumps({k: conf.get(k) for k in keys}, sort_keys=True)
 
@@ -31,9 +31,10 @@ def _conf_key(conf: dict) -> str:
 def diff_cameras(current: dict[str, dict], desired: dict[str, dict]) -> dict[str, list[str]]:
     """差分適用の計画を作る。current / desired は camera_id → 設定。
 
-    戻り値: {"start": [...], "stop": [...], "restart": [...], "remove": [...]}
+    戻り値: {"start": [...], "stop": [...], "restart": [...], "remove": [...], "encoder": [...]}
+    encoder は、動いたままのカメラで desired の encoder だけが変わったもの(パイプラインは作り直さない)。
     """
-    plan: dict[str, list[str]] = {"start": [], "stop": [], "restart": [], "remove": []}
+    plan: dict[str, list[str]] = {"start": [], "stop": [], "restart": [], "remove": [], "encoder": []}
     for cam in sorted(set(current) - set(desired)):
         plan["remove"].append(cam)
     for cam in sorted(desired):
@@ -52,6 +53,8 @@ def diff_cameras(current: dict[str, dict], desired: dict[str, dict]) -> dict[str
             plan["start"].append(cam)
         elif _conf_key(have) != _conf_key(want):
             plan["restart"].append(cam)
+        elif want.get("encoder") and want.get("encoder") != have.get("encoder"):
+            plan["encoder"].append(cam)
     return plan
 
 
@@ -87,10 +90,11 @@ class CameraWorker:
             if self.info is None or attempt % 3 == 0:
                 cli = onvif.OnvifClient(c["onvif_url"], c.get("username", ""), c.get("password", ""))
                 try:
-                    # desired の codec があれば、カメラのエンコーダーをそのコーデックに切り替えてから選ぶ
+                    # desired の codec があれば、カメラのエンコーダーをそのコーデックに切り替えてから選ぶ。
+                    # encoder(Quality、ビットレート上限、VBR / CBR)もここで設定する
                     self.info = await asyncio.to_thread(cli.resolve, c.get("profile_token"),
                                                         c.get("prefer_codec") or self.cfg.prefer_codec,
-                                                        c.get("codec"))
+                                                        c.get("codec"), c.get("encoder"))
                     self.resolve_error = None
                     log.info("[%s] ONVIF: profile=%s codec=%s %dx%d %s", self.camera_id,
                              self.info.profile_token, self.info.codec, self.info.width,
@@ -125,6 +129,22 @@ class CameraWorker:
         if kind == "streaming" and self.webrtc.running and self.webrtc.spec is not None:
             # 録画側が ONVIF で取り直した URL やコーデックが変わっていたら、master も起動し直す
             asyncio.get_running_loop().create_task(self._refresh_webrtc())
+
+    async def apply_encoder(self) -> None:
+        """desired の encoder だけが変わったとき、カメラのエンコーダーに設定する。パイプラインは作り直さない
+        (カメラがエンコーダーを作り直して RTSP が切れたら、いつもの再接続でつなぎ直す)。"""
+        info, c = self.info, self.conf
+        if info is None or c.get("rtsp_url"):
+            return  # ONVIF で取る前なら resolve で設定する。rtsp_url の直指定は ONVIF を使わない
+        cli = onvif.OnvifClient(c["onvif_url"], c.get("username", ""), c.get("password", ""))
+        try:
+            await asyncio.to_thread(cli.apply_encoder, info.profile_token, c.get("encoder") or {})
+            info.profiles = (await asyncio.to_thread(cli.get_profiles))[1]
+            info.encoder_error = None
+        except (onvif.OnvifError, ValueError) as e:
+            info.encoder_error = f"エンコーダーの設定を変えられない: {e}"
+            log.warning("[%s] %s", self.camera_id, info.encoder_error)
+        self.agent.report_soon()
 
     # --- WebRTC -----------------------------------------------------------
     @property
@@ -235,6 +255,9 @@ class CameraWorker:
             # 切り替えの直後に前のパイプラインの caps が残らないよう、今のパイプラインの設定を優先する
             "codec": ((info.codec if info else None) or caps.get("codec")),
             "codec_error": info.codec_error if info else None,
+            # エンコーダーの今の設定(ONVIF の Media2 のプロファイルから。分からなければ null)
+            "encoder": (prof.encoder() if info and (prof := info.selected()) else None),
+            "encoder_error": info.encoder_error if info else None,
             "resolution": f"{w}x{h}" if w and h else None,
             "profile_token": info.profile_token if info else None,
             "error": err,
@@ -329,6 +352,8 @@ class Agent:
                 else:
                     # webrtc.enabled だけの変更は録画のパイプラインを作り直さない
                     w.sync_webrtc()
+                    if cam in plan["encoder"]:
+                        asyncio.get_running_loop().create_task(w.apply_encoder())
             self.confs = desired
             self.ptz.sync(desired)
         self.report_soon()

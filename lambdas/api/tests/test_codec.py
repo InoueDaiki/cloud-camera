@@ -43,6 +43,27 @@ def test_set_codec_bad_body(iot, body):
     assert r["statusCode"] == 400
 
 
+def test_set_encoder(iot):
+    r = handler.lambda_handler(event("PUT", "/api/cameras/cam-001/encoder",
+                                     body={"quality": 60, "bitrate_limit_kbps": 4000, "rate_control": "vbr"}), None)
+    assert r["statusCode"] == 200, r["body"]
+    assert json.loads(r["body"])["encoder"] == {"quality": 60, "bitrate_limit_kbps": 4000, "rate_control": "VBR"}
+    # 書いた項目だけが変わる
+    r = handler.lambda_handler(event("PUT", "/api/cameras/cam-001/encoder", body={"bitrate_limit_kbps": 5000}), None)
+    assert r["statusCode"] == 200, r["body"]
+    shadow = json.loads(iot.get_thing_shadow(thingName="test-gw-001")["payload"].read())
+    desired = shadow["state"]["desired"]["cameras"]["cam-001"]
+    assert desired["encoder"] == {"quality": 60, "bitrate_limit_kbps": 5000, "rate_control": "VBR"}
+    assert desired["streaming"] is True
+
+
+@pytest.mark.parametrize("body", [{}, None, {"quality": "high"}, {"quality": True}, {"bitrate_limit_kbps": 0},
+                                  {"bitrate_limit_kbps": 1.5}, {"rate_control": "ABR"}, {"resolution": "1920x1080"}])
+def test_set_encoder_bad_body(iot, body):
+    r = handler.lambda_handler(event("PUT", "/api/cameras/cam-001/encoder", body=body), None)
+    assert r["statusCode"] == 400
+
+
 def test_playlist_and_timeline_with_codec_switch(ddb):
     """区間の途中で H.265 → H.264 に変わった区間は、部分ごとに DISCONTINUITY と EXT-X-MAP を切り替える。"""
     p = "cam-001/2026/10/24/10/30/"

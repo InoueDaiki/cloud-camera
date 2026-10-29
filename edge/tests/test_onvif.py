@@ -29,7 +29,8 @@ PROFILES = """
  <tr2:Profiles token="main" fixed="true"><tr2:Name>main</tr2:Name><tr2:Configurations>
   <tr2:VideoEncoder token="ve1" GovLength="25"><tt:Encoding>{main}</tt:Encoding>
    <tt:Resolution><tt:Width>1920</tt:Width><tt:Height>1080</tt:Height></tt:Resolution>
-   <tt:RateControl><tt:FrameRateLimit>25</tt:FrameRateLimit><tt:BitrateLimit>2048</tt:BitrateLimit></tt:RateControl>
+   <tt:RateControl ConstantBitRate="{cbr}"><tt:FrameRateLimit>25</tt:FrameRateLimit><tt:BitrateLimit>{bitrate}</tt:BitrateLimit></tt:RateControl>
+   <tt:Quality>{quality}</tt:Quality>
   </tr2:VideoEncoder></tr2:Configurations></tr2:Profiles>
 </tr2:GetProfilesResponse>"""
 
@@ -38,6 +39,7 @@ class FakeCamera(BaseHTTPRequestHandler):
     user, password = "admin", "admin"
     calls: list[str] = []
     main_encoding = "H265"  # SetVideoEncoderConfiguration で変わる
+    main_quality, main_bitrate, main_cbr = "50", "2048", "false"
     reject_set = False
     last_set: ET.Element | None = None
 
@@ -80,18 +82,26 @@ class FakeCamera(BaseHTTPRequestHandler):
                         "<tds:XAddr>http://127.0.0.1:%d/onvif/media2</tds:XAddr></tds:Service>"
                         "</tds:GetServicesResponse>" % port)
         elif op == "GetProfiles":
-            resp = _env(PROFILES.format(main=FakeCamera.main_encoding))
+            resp = _env(PROFILES.format(main=FakeCamera.main_encoding, quality=FakeCamera.main_quality,
+                                        bitrate=FakeCamera.main_bitrate, cbr=FakeCamera.main_cbr))
         elif op == "GetVideoEncoderConfigurations":
             resp = _env(f'<tr2:GetVideoEncoderConfigurationsResponse><tr2:Configurations token="ve1" GovLength="25" '
                         f'Profile="Main"><tt:Name>main</tt:Name><tt:Encoding>{FakeCamera.main_encoding}</tt:Encoding>'
                         "<tt:Resolution><tt:Width>1920</tt:Width><tt:Height>1080</tt:Height></tt:Resolution>"
+                        f'<tt:RateControl ConstantBitRate="{FakeCamera.main_cbr}"><tt:FrameRateLimit>25</tt:FrameRateLimit>'
+                        f"<tt:BitrateLimit>{FakeCamera.main_bitrate}</tt:BitrateLimit></tt:RateControl>"
+                        f"<tt:Quality>{FakeCamera.main_quality}</tt:Quality>"
                         "</tr2:Configurations></tr2:GetVideoEncoderConfigurationsResponse>")
         elif op == "SetVideoEncoderConfiguration":
             if FakeCamera.reject_set:
                 return self._send(400, _env("<s:Fault><s:Reason><s:Text>ConfigModify</s:Text></s:Reason></s:Fault>"))
             conf = list(list(body)[0])[0]
             FakeCamera.last_set = conf
-            FakeCamera.main_encoding = [e.text for e in conf.iter() if e.tag.endswith("Encoding")][0]
+            text = {e.tag.rsplit("}", 1)[-1]: e for e in conf.iter()}
+            FakeCamera.main_encoding = text["Encoding"].text
+            FakeCamera.main_quality = text["Quality"].text
+            FakeCamera.main_bitrate = text["BitrateLimit"].text
+            FakeCamera.main_cbr = text["RateControl"].get("ConstantBitRate")
             resp = _env("<tr2:SetVideoEncoderConfigurationResponse/>")
         elif op == "GetStreamUri":
             tok = [e.text for e in root.iter() if e.tag.endswith("ProfileToken")][0]
@@ -115,6 +125,7 @@ def camera():
     t.start()
     FakeCamera.calls = []
     FakeCamera.main_encoding = "H265"
+    FakeCamera.main_quality, FakeCamera.main_bitrate, FakeCamera.main_cbr = "50", "2048", "false"
     FakeCamera.reject_set = False
     yield f"http://127.0.0.1:{srv.server_address[1]}/onvif/device_service"
     srv.shutdown()
@@ -217,3 +228,40 @@ def test_parse_probe_matches():
     assert m == [{"urn": "urn:uuid:1234", "types": ["dn:NetworkVideoTransmitter", "tds:Device"],
                   "scopes": ["onvif://www.onvif.org/name/cam1", "onvif://www.onvif.org/Profile/Streaming"],
                   "xaddrs": ["http://10.0.0.5:8080/onvif/device_service"], "from": "10.0.0.5"}]
+
+
+def test_profile_encoder_settings(camera):
+    info = _cli(camera).resolve()
+    assert info.selected().encoder() == {"quality": 50.0, "bitrate_limit_kbps": 2048, "rate_control": "VBR",
+                                         "framerate": 25.0, "gov_length": 25}
+
+
+def test_resolve_sets_encoder(camera):
+    info = _cli(camera).resolve(want_encoder={"quality": 70, "bitrate_limit_kbps": 4000, "rate_control": "VBR"})
+    assert info.encoder_error is None
+    conf = FakeCamera.last_set
+    assert conf.get("token") == "ve1" and conf.get("Profile") == "Main"  # コーデックはそのまま
+    assert (FakeCamera.main_quality, FakeCamera.main_bitrate, FakeCamera.main_cbr) == ("70", "4000", "false")
+    # 設定し直したプロファイルの値を返す
+    assert info.selected().encoder()["quality"] == 70.0 and info.selected().encoder()["bitrate_limit_kbps"] == 4000
+    # 同じなら Set しない。省略した項目は変えない
+    FakeCamera.calls = []
+    _cli(camera).resolve(want_encoder={"quality": 70})
+    assert "SetVideoEncoderConfiguration" not in FakeCamera.calls
+    assert _cli(camera).apply_encoder("main", {"rate_control": "cbr"})
+    assert (FakeCamera.main_quality, FakeCamera.main_bitrate, FakeCamera.main_cbr) == ("70", "4000", "true")
+
+
+def test_resolve_reports_encoder_error(camera):
+    FakeCamera.reject_set = True
+    info = _cli(camera).resolve(want_encoder={"bitrate_limit_kbps": 4000})
+    # 配信は今の設定のまま続ける
+    assert info.rtsp_url.endswith("/main") and "変えられない" in info.encoder_error
+    info = _cli(camera).resolve(want_encoder={"quality": "high"})
+    assert "quality" in info.encoder_error
+
+
+@pytest.mark.parametrize("want", [{"quality": True}, {"bitrate_limit_kbps": 0}, {"rate_control": "ABR"}, []])
+def test_encoder_args_rejects_bad_values(want):
+    with pytest.raises(ValueError):
+        onvif.encoder_args(want)

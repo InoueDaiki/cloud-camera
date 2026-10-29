@@ -3,7 +3,8 @@
 - WS-Discovery(UDP マルチキャスト 239.255.255.250:3702 への Probe)
 - WS-Security UsernameToken(PasswordDigest)
 - Device: GetSystemDateAndTime(時刻差の補正)、GetServices(Media2 / Media の XAddr)
-- Media2: GetProfiles、GetStreamUri(H.265 のプロファイルを自動選択。設定で H.264 優先にもできる)
+- Media2: GetProfiles、GetStreamUri(H.265 のプロファイルを自動選択。設定で H.264 優先にもできる)、
+  SetVideoEncoderConfiguration(コーデック、Quality、ビットレート上限、VBR / CBR)
 - Media2 がないカメラは Media(ver10)にフォールバックする
 """
 
@@ -61,6 +62,14 @@ class Profile:
     framerate: float | None = None
     bitrate_kbps: int | None = None
     gov_length: int | None = None
+    quality: float | None = None
+    constant_bitrate: bool | None = None  # Media2 の RateControl の ConstantBitRate 属性(ないカメラは None)
+
+    def encoder(self) -> dict:
+        """reported.cameras.{id}.encoder に返す、エンコーダーの今の設定。"""
+        rc = None if self.constant_bitrate is None else ("CBR" if self.constant_bitrate else "VBR")
+        return {"quality": self.quality, "bitrate_limit_kbps": self.bitrate_kbps, "rate_control": rc,
+                "framerate": self.framerate, "gov_length": self.gov_length}
 
 
 @dataclass
@@ -73,6 +82,10 @@ class StreamInfo:
     media_version: int  # 2 = Media2, 1 = Media
     profiles: list[Profile] = field(default_factory=list)
     codec_error: str | None = None  # desired の codec に切り替えられなかった理由
+    encoder_error: str | None = None  # desired の encoder を設定できなかった理由
+
+    def selected(self) -> Profile | None:
+        return next((p for p in self.profiles if p.token == self.profile_token), None)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -264,17 +277,18 @@ class OnvifClient:
             raise OnvifError("GetStreamUri の応答に Uri がない")
         return _rewrite_host(uri, self.device_url)
 
-    def set_encoder_codec(self, profile_token: str, codec: str) -> bool:
-        """Media2 の SetVideoEncoderConfiguration で、プロファイルのエンコーダーの Encoding を codec にする。
+    def set_encoder(self, profile_token: str, codec: str | None = None, quality: float | None = None,
+                    bitrate_limit_kbps: int | None = None, constant_bitrate: bool | None = None) -> bool:
+        """Media2 の SetVideoEncoderConfiguration で、プロファイルのエンコーダーの設定を変える。None の項目は変えない。
 
-        今の構成を GetVideoEncoderConfigurations で取り、Encoding と Profile 属性(H.265 は Main、H.264 は High)
-        だけを変えて送り返す。変えたら True、すでに codec なら False。カメラが拒否したら OnvifError。
+        今の構成を GetVideoEncoderConfigurations で取り、指定した項目(Encoding と Profile 属性(H.265 は Main、
+        H.264 は High)、Quality、RateControl の BitrateLimit と ConstantBitRate 属性)だけを変えて送り返す。
+        変えたら True、すべて今と同じなら False。カメラが拒否したら OnvifError。
         """
-        codec = normalize_codec(codec)
         if not self.services:
             self.get_services()
         if MEDIA2_NS not in self.services:
-            raise OnvifError("Media2 がないのでコーデックを変えられない")
+            raise OnvifError("Media2 がないのでエンコーダーの設定を変えられない")
         body = self.call(self.services[MEDIA2_NS],
                          "<tr2:GetVideoEncoderConfigurations>"
                          f"<tr2:ProfileToken>{_xml_escape(profile_token)}</tr2:ProfileToken>"
@@ -282,28 +296,61 @@ class OnvifClient:
         conf = _find_local(body, "Configurations")
         if conf is None:
             raise OnvifError(f"プロファイル {profile_token} にエンコーダーの構成がない")
-        enc = _find_local(conf, "Encoding")
-        if enc is None:
-            raise OnvifError("エンコーダーの構成に Encoding がない")
-        if _norm_encoding(enc.text or "") == codec:
+        changed = []
+        if codec is not None:
+            codec = normalize_codec(codec)
+            enc = _find_local(conf, "Encoding")
+            if enc is None:
+                raise OnvifError("エンコーダーの構成に Encoding がない")
+            if _norm_encoding(enc.text or "") != codec:
+                enc.text = codec
+                conf.set("Profile", "Main" if codec == "H265" else "High")
+                changed.append(f"Encoding={codec}")
+        if quality is not None:
+            q = _find_local(conf, "Quality")
+            if q is None:
+                q = ET.SubElement(conf, f"{{{NS['tt']}}}Quality")
+            if q.text is None or float(q.text) != float(quality):
+                q.text = f"{float(quality):g}"
+                changed.append(f"Quality={q.text}")
+        if bitrate_limit_kbps is not None or constant_bitrate is not None:
+            rc = _find_local(conf, "RateControl")
+            if rc is None:
+                raise OnvifError("エンコーダーの構成に RateControl がない")
+            if bitrate_limit_kbps is not None:
+                br = _find_local(rc, "BitrateLimit")
+                if br is None:
+                    raise OnvifError("エンコーダーの構成に BitrateLimit がない")
+                if br.text is None or int(float(br.text)) != int(bitrate_limit_kbps):
+                    br.text = str(int(bitrate_limit_kbps))
+                    changed.append(f"BitrateLimit={br.text}")
+            if constant_bitrate is not None:
+                want = "true" if constant_bitrate else "false"
+                if (rc.get("ConstantBitRate") or "false").lower() != want:
+                    rc.set("ConstantBitRate", want)
+                    changed.append(f"ConstantBitRate={want}")
+        if not changed:
             return False
-        enc.text = codec
-        conf.set("Profile", "Main" if codec == "H265" else "High")
         conf.tag = f"{{{MEDIA2_NS}}}Configuration"
         xml = ET.tostring(conf, encoding="unicode")
         self.call(self.services[MEDIA2_NS],
                   f"<tr2:SetVideoEncoderConfiguration>{xml}</tr2:SetVideoEncoderConfiguration>")
-        log.info("ONVIF: %s のエンコーダーを %s に変更", profile_token, codec)
+        log.info("ONVIF: %s のエンコーダーを変更 %s", profile_token, " ".join(changed))
         return True
 
+    def set_encoder_codec(self, profile_token: str, codec: str) -> bool:
+        """プロファイルのエンコーダーの Encoding を codec にする(set_encoder の codec だけ)。"""
+        return self.set_encoder(profile_token, codec=codec)
+
     def resolve(self, profile_token: str | None = None, prefer_codec: str = "H265",
-                want_codec: str | None = None) -> StreamInfo:
+                want_codec: str | None = None, want_encoder: dict | None = None) -> StreamInfo:
         """プロファイルを選び(指定がなければ prefer_codec、既定 H.265 で最大解像度)、RTSP URL を返す。
 
         want_codec(シャドウの desired の codec)を指定すると、カメラのエンコーダーをそのコーデックに切り替える:
         対象のプロファイル(profile_token、なければ最大解像度)の Encoding を Media2 の SetVideoEncoderConfiguration で
         変える。変えられなければ(Media2 がない、カメラが拒否した)want_codec のプロファイルを選び直し、
         それもなければもう一方のまま(StreamInfo.codec_error に理由)。
+        want_encoder(desired の encoder)があれば、選んだプロファイルの Quality などを設定する(apply_encoder)。
         """
         self.sync_clock()
         version, profiles = self.get_profiles()
@@ -327,10 +374,26 @@ class OnvifClient:
         prof = select_profile(profiles, profile_token, prefer_codec)
         if want_codec and prof.encoding != want_codec and codec_error is None:
             codec_error = f"{want_codec} のプロファイルがない({prof.encoding} で送る)"
+        encoder_error = None
+        if want_encoder:
+            try:
+                if self.apply_encoder(prof.token, want_encoder):
+                    time.sleep(self.codec_switch_settle_s)
+                    version, profiles = self.get_profiles()
+                    prof = select_profile(profiles, prof.token)
+            except (OnvifError, ValueError) as e:
+                encoder_error = f"エンコーダーの設定を変えられない: {e}"
+                log.warning("%s", encoder_error)
         uri = self.get_stream_uri(version, prof.token)
         return StreamInfo(rtsp_url=uri, profile_token=prof.token, codec=prof.encoding,
                           width=prof.width, height=prof.height, media_version=version,
-                          profiles=profiles, codec_error=codec_error)
+                          profiles=profiles, codec_error=codec_error, encoder_error=encoder_error)
+
+    def apply_encoder(self, profile_token: str, want: dict) -> bool:
+        """シャドウの desired の encoder({"quality", "bitrate_limit_kbps", "rate_control": "VBR"|"CBR"}、
+        どれも省略可)をプロファイルのエンコーダーに設定する。変えたら True。"""
+        args = encoder_args(want)
+        return self.set_encoder(profile_token, **args) if args else False
 
 
 def _fault_reason(raw: bytes) -> str:
@@ -368,8 +431,12 @@ def parse_media2_profiles(body: ET.Element) -> list[Profile]:
                 br = _text(rc, "BitrateLimit")
                 prof.framerate = float(fr) if fr else None
                 prof.bitrate_kbps = int(float(br)) if br else None
+                cbr = rc.get("ConstantBitRate")
+                prof.constant_bitrate = cbr.lower() == "true" if cbr else None
             gov = enc.get("GovLength") or _text(enc, "GovLength")
             prof.gov_length = int(gov) if gov else None
+            q = _text(enc, "Quality")
+            prof.quality = float(q) if q else None
         out.append(prof)
     return out
 
@@ -389,6 +456,30 @@ def parse_media1_profiles(body: ET.Element) -> list[Profile]:
 
 
 CODECS = ("H265", "H264")
+RATE_CONTROLS = ("VBR", "CBR")
+
+
+def encoder_args(want: dict) -> dict:
+    """desired の encoder → set_encoder の引数。値がおかしければ ValueError。"""
+    if not isinstance(want, dict):
+        raise ValueError(f"encoder はオブジェクトにする: {want!r}")
+    args: dict = {}
+    q = want.get("quality")
+    if q is not None:
+        if isinstance(q, bool) or not isinstance(q, int | float):
+            raise ValueError(f"quality は数値にする: {q!r}")
+        args["quality"] = float(q)
+    br = want.get("bitrate_limit_kbps")
+    if br is not None:
+        if isinstance(br, bool) or not isinstance(br, int | float) or br <= 0:
+            raise ValueError(f"bitrate_limit_kbps は正の数にする: {br!r}")
+        args["bitrate_limit_kbps"] = int(br)
+    rc = want.get("rate_control")
+    if rc is not None:
+        if str(rc).upper() not in RATE_CONTROLS:
+            raise ValueError(f"rate_control は VBR か CBR にする: {rc!r}")
+        args["constant_bitrate"] = str(rc).upper() == "CBR"
+    return args
 
 
 def normalize_codec(v: str | None, default: str = "H265") -> str:

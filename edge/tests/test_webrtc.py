@@ -24,7 +24,7 @@ def test_enabled_default_and_values():
 def test_webrtc_toggle_does_not_restart_recording():
     # webrtc.enabled だけの変更は録画のパイプラインの作り直し(restart)にならない
     off = {**CAM, "webrtc": {"enabled": False}}
-    assert diff_cameras({"cam-001": CAM}, {"cam-001": off}) == {"start": [], "stop": [], "restart": [], "remove": []}
+    assert diff_cameras({"cam-001": CAM}, {"cam-001": off}) == {"start": [], "stop": [], "restart": [], "remove": [], "encoder": []}
 
 
 def test_select_sub_profile():
