@@ -9,6 +9,7 @@ import {
   mockTimeline,
   mockWebRtc,
   setDesiredCodec,
+  setDesiredEncoder,
   setDesiredStreaming,
 } from './data';
 import { mockPtzCommand, mockPtzState } from './ptz';
@@ -43,6 +44,22 @@ export const handlers = [
       return HttpResponse.json({ error: { code: 'CAMERA_NOT_FOUND', message: 'カメラがありません' } }, { status: 404 });
     }
     return HttpResponse.json({ camera_id: params.id, codec: body.codec, version: 1 });
+  }),
+
+  http.put('/api/cameras/:id/encoder', async ({ params, request }) => {
+    const body = (await request.json()) as { quality?: number; bitrate_limit_kbps?: number; rate_control?: string };
+    await delay(300);
+    const ok =
+      body && typeof body === 'object' &&
+      (body.quality == null || (typeof body.quality === 'number' && body.quality >= 0)) &&
+      (body.bitrate_limit_kbps == null || (Number.isInteger(body.bitrate_limit_kbps) && body.bitrate_limit_kbps > 0)) &&
+      (body.rate_control == null || body.rate_control === 'VBR' || body.rate_control === 'CBR');
+    if (!ok) return HttpResponse.json({ error: { code: 'BAD_REQUEST', message: 'encoder の値が不正です' } }, { status: 400 });
+    const want = Object.fromEntries(Object.entries(body).filter(([, v]) => v != null));
+    if (!setDesiredEncoder(String(params.id), want, Date.now())) {
+      return HttpResponse.json({ error: { code: 'CAMERA_NOT_FOUND', message: 'カメラがありません' } }, { status: 404 });
+    }
+    return HttpResponse.json({ camera_id: params.id, encoder: want, version: 1 });
   }),
 
   // KVS WebRTC の視聴情報。モックではブラウザ内の疑似 master(src/mocks/rtcMaster.ts)につなぐ

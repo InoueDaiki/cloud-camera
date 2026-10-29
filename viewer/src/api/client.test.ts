@@ -29,6 +29,18 @@ describe('normalizeCamera', () => {
     expect(normalizeCamera({ camera_id: 'c', reported: { streaming: true } }).ptz_supported).toBe(false);
   });
 
+  it('エンコーダーの設定は reported / desired の encoder', () => {
+    const c = normalizeCamera({
+      camera_id: 'a',
+      reported: { encoder: { quality: 60, bitrate_limit_kbps: 4000, rate_control: 'VBR' }, encoder_error: 'x' },
+      desired: { encoder: { quality: 70 } },
+    });
+    expect(c.encoder).toMatchObject({ quality: 60, bitrate_limit_kbps: 4000 });
+    expect(c.desired_encoder).toEqual({ quality: 70 });
+    expect(c.encoder_error).toBe('x');
+    expect(normalizeCamera({ camera_id: 'b', reported: { encoder: null } }).encoder).toBeNull();
+  });
+
   it('シャドウがまだない(reported も desired も null)', () => {
     const c = normalizeCamera({ camera_id: 'cam-002', reported: null, desired: null });
     expect(c.streaming).toBe(false);

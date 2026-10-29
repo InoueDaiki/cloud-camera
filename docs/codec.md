@@ -119,7 +119,8 @@ mise exec -- uv run python -m cost desk --bitrate-mbps 1.6 --archiver-duration-s
 カメラの VBR は「画質の目標(ONVIF の Quality)+ ビットレートの上限(BitrateLimit)」で動く。x265 の CRF(= Quality)と
 `vbv-maxrate`(= 上限。`vbv-bufsize` は上限の 2 秒分)で、上の 2 場面を 3 / 4 / 5 Mbps の上限でエンコードし、同じ CRF の上限なしと比べた
 (`sweep --maxrate`、`capped`。生の値は `tools/codec/results/1080p30/capped.jsonl`、`capped_summary.json`)。
-シャドウからの設定は desired の `encoder`([contracts.md](contracts.md))。
+設定はビューワーのプレーヤーの「カメラ設定」(歯車)→「画質とビットレート」から(`PUT /api/cameras/{id}/encoder` →
+シャドウの desired の `encoder`。[contracts.md](contracts.md))。配信は止めずにカメラへ設定する。
 
 **目安: VMAF 93 を狙うなら、上限 4 Mbps と CRF 26 相当の Quality(エミュレーターの Quality 70)**。
 

@@ -291,7 +291,7 @@ status の `cameras.*.webrtc`(KVS WebRTC のライブ。値は master が 10 秒
 | `GET /api/cameras/{id}/webrtc` | KVS WebRTC の視聴情報(下記)。ブラウザに AWS の認証情報は渡さない |
 | `POST /api/search` | `{"question": "..."}` → `{"answer": "...", "hits": [{"camera_id", "ts", "label", "confidence"}], "sql": "...", "usage": {...}}` |
 
-ビューワーが cameras の `reported` / `desired` から読む項目: `streaming`、`codec`、`codec_error`、`resolution`、`error`(`reported`)、`streaming`、`codec`(`desired`)、`name`(どちらか。なければ camera_id を表示)。
+ビューワーが cameras の `reported` / `desired` から読む項目: `streaming`、`codec`、`codec_error`、`encoder`、`encoder_error`、`resolution`、`error`(`reported`)、`streaming`、`codec`、`encoder`(`desired`)、`name`(どちらか。なければ camera_id を表示)。
 `desired.codec` と `reported.codec` が違う間は「切り替え中」と表示する。
 cameras の各項目の `online` はゲートウェイの死活(bool か null)。シャドウの `reported.online` が true でも `last_seen` が 90 秒より古ければ false、シャドウに情報がなければ null(ビューワーは「不明」として表示しない)。
 

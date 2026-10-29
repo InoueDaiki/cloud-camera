@@ -115,6 +115,7 @@ export function mockCameras(now: number): CameraRaw[] {
         streaming: off === null && want,
         rtsp_url: `rtsp://emulator:8554/cam${c.camera_id.slice(-1)}/main`,
         codec: mockCodec(c.camera_id, now),
+        encoder: mockEncoder(c.camera_id, now),
         resolution: '1920x1080',
         error: off === null ? null : 'ゲートウェイからの応答がありません(LWT 受信)',
         ptz: mockPtzState(c.camera_id, now),
@@ -128,6 +129,7 @@ export function mockCameras(now: number): CameraRaw[] {
         profile_token: null,
         ...(c.webrtc ? {} : { webrtc: { enabled: false } }),
         ...(codecs.has(c.camera_id) ? { codec: codecs.get(c.camera_id)!.want } : {}),
+        ...(encoders.has(c.camera_id) ? { encoder: encoders.get(c.camera_id)!.want } : {}),
       },
       reported_at: iso(off ?? now - 12 * SECOND),
       video_processed_until: iso(processedUntil(c, now)),
@@ -188,6 +190,29 @@ function mockCodec(cameraId: string, now: number): string {
 export function setDesiredCodec(cameraId: string, codec: 'H265' | 'H264', now: number): boolean {
   if (camIndex(cameraId) < 0) return false;
   codecs.set(cameraId, { want: codec, prev: mockCodec(cameraId, now), since: now });
+  return true;
+}
+
+// エンコーダーの設定(desired の encoder)。エッジがカメラに設定するのを模して、指示から 3 秒後に reported が変わる
+type MockEncoder = { quality: number; bitrate_limit_kbps: number; rate_control: 'VBR' | 'CBR' };
+const DEFAULT_ENCODER: MockEncoder = { quality: 60, bitrate_limit_kbps: 4000, rate_control: 'VBR' };
+const encoders = new Map<string, { want: Partial<MockEncoder>; prev: MockEncoder; since: number }>();
+const ENCODER_APPLY_MS = 3000;
+
+function mockEncoder(cameraId: string, now: number) {
+  const e = encoders.get(cameraId);
+  const cur = !e ? DEFAULT_ENCODER : now - e.since >= ENCODER_APPLY_MS ? { ...e.prev, ...e.want } : e.prev;
+  return { ...cur, framerate: 30, gov_length: 30 };
+}
+
+export function setDesiredEncoder(cameraId: string, want: Partial<MockEncoder>, now: number): boolean {
+  if (camIndex(cameraId) < 0) return false;
+  const { quality, bitrate_limit_kbps, rate_control } = mockEncoder(cameraId, now);
+  encoders.set(cameraId, {
+    want: { ...encoders.get(cameraId)?.want, ...want },
+    prev: { quality, bitrate_limit_kbps, rate_control },
+    since: now,
+  });
   return true;
 }
 

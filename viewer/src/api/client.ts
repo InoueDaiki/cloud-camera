@@ -3,6 +3,7 @@ import type {
   CameraRaw,
   CamerasResponse,
   CamerasResponseRaw,
+  EncoderSettings,
   KvsHlsResponse,
   PtzCommand,
   PtzCommandResponse,
@@ -51,6 +52,9 @@ const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z')
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
 
+const obj = (v: unknown): EncoderSettings | null =>
+  v && typeof v === 'object' && !Array.isArray(v) ? (v as EncoderSettings) : null;
+
 /** API のカメラ(シャドウの reported / desired を含む)を画面で使う形に直す */
 export function normalizeCamera(raw: CameraRaw): Camera {
   const rep = raw.reported ?? null;
@@ -66,6 +70,9 @@ export function normalizeCamera(raw: CameraRaw): Camera {
     codec: str(rep?.codec),
     desired_codec: str(des?.codec),
     codec_error: str(rep?.codec_error),
+    encoder: obj(rep?.encoder),
+    desired_encoder: obj(des?.encoder),
+    encoder_error: str(rep?.encoder_error),
     resolution: str(rep?.resolution),
     error: str(rep?.error),
     ptz_supported: rep?.ptz?.supported === true,
@@ -92,6 +99,13 @@ export const api = {
     request<unknown>(`/cameras/${encodeURIComponent(cameraId)}/codec`, {
       method: 'PUT',
       body: JSON.stringify({ codec }),
+    }),
+
+  /** エンコーダーの設定(書いた項目だけをシャドウの desired に書く。エッジが配信を止めずにカメラへ設定する) */
+  setEncoder: (cameraId: string, encoder: Pick<EncoderSettings, 'quality' | 'bitrate_limit_kbps' | 'rate_control'>) =>
+    request<unknown>(`/cameras/${encodeURIComponent(cameraId)}/encoder`, {
+      method: 'PUT',
+      body: JSON.stringify(encoder),
     }),
 
   timeline: (cameraId: string, fromMs: number, toMs: number) =>

@@ -1,5 +1,17 @@
 // HTTP API の型(docs/contracts.md の「HTTP API」節に対応)
 
+/** エンコーダーの設定(シャドウの desired / reported の encoder。docs/contracts.md「IoT Core」) */
+export interface EncoderSettings {
+  /** ONVIF の Quality。範囲と意味はカメラの機種ごと(エミュレーターは 0〜100) */
+  quality?: number | null;
+  /** ビットレートの上限(VBR)/ 目標(CBR) */
+  bitrate_limit_kbps?: number | null;
+  rate_control?: 'VBR' | 'CBR' | null;
+  /** reported だけ */
+  framerate?: number | null;
+  gov_length?: number | null;
+}
+
 /** シャドウの reported / desired のうち、ビューワーが読む項目(docs/contracts.md「IoT Core」) */
 export interface ShadowCamera {
   streaming?: boolean | null;
@@ -47,6 +59,12 @@ export interface Camera {
   desired_codec: string | null;
   /** 指示した形式に切り替えられなかった理由(reported の codec_error) */
   codec_error: string | null;
+  /** カメラのエンコーダーの今の設定(reported の encoder)。分からなければ null */
+  encoder: EncoderSettings | null;
+  /** 指示したエンコーダーの設定(desired の encoder)。なければ null(カメラの設定のまま) */
+  desired_encoder: EncoderSettings | null;
+  /** エンコーダーを設定できなかった理由(reported の encoder_error) */
+  encoder_error: string | null;
   resolution: string | null;
   error: string | null;
   /** PTZ に対応しているか(シャドウの reported.ptz.supported) */
