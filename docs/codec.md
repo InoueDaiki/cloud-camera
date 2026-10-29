@@ -64,6 +64,86 @@ mise exec -- uv run python -m cost desk --bitrate-mbps 1.0 --archiver-duration-s
 mise exec -- uv run python -m cost desk --bitrate-mbps 1.6 --archiver-duration-s 3.2 --detector-overhead-s 1.6 --sprite-kb 258
 ```
 
+## 解像度の比較: 1080p / 720p × H.264 / H.265(30 fps、2026-10-28)
+
+同じ画質(VMAF)にするのに、どのコーデックと解像度がいちばん少ないビットレートで済むか。**どちらの場面でも H.265 の 1080p が最少か、
+最少とほぼ同じ**。720p に下げても通信量は減らない(細かい映像では逆に 1.5 倍に増え、VMAF 90 に届かない)。
+
+1920×1080 の参照に対し、720p はエンコード前に bicubic で縮め、デコード後に bicubic で 1080p に拡大して比べる(1 台を全画面で見る想定。
+`vmaf_v0.6.1` は 1080p の画面を画面の高さの 3 倍の距離から見る前提)。30 fps、キーフレーム 1 秒、B フレームなし、CRF の VBR、30 秒。
+場面は Pexels の 2 本([tools/codec/media/SOURCES.md](../tools/codec/media/SOURCES.md))。人が少ない(夜間)の場面は今回測っていない。
+
+| 場面 | 中身 |
+| --- | --- |
+| `crowd` | 交差点を目の高さの望遠で。人が次々と横切る(動き多い)。元が 1080p の 9.3 Mbps で、動きぶれもあり細部が少ない |
+| `road_dusk` | 歩道橋から見下ろした夕方の道路。車の流れと少しの歩行者。元が 4K なので細部が多い |
+
+### 同じ VMAF(平均)になるビットレート(Mbps)
+
+| 場面 | プリセット | VMAF | H.265 1080p | H.265 720p | H.264 1080p | H.264 720p |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| crowd | medium | 90 | 3.15 | **3.10** | 4.48 | 3.83 |
+| crowd | medium | 93 | 3.54 | **3.50** | 4.95 | 4.23 |
+| crowd | medium | 95 | **3.82** | 3.83 | 5.30 | 4.60 |
+| crowd | ultrafast | 90 | **3.26** | 3.44 | 6.91 | 6.08 |
+| crowd | ultrafast | 93 | **3.67** | 3.94 | 7.82 | 6.85 |
+| road_dusk | medium | 85 | **1.28** | 1.91 | 1.96 | 2.59 |
+| road_dusk | medium | 90 | **2.14** | 届かない | 3.45 | 届かない |
+| road_dusk | medium | 93 | **3.42** | 届かない | 5.63 | 届かない |
+| road_dusk | ultrafast | 90 | **2.73** | 届かない | 4.34 | 7.65 |
+| road_dusk | ultrafast | 93 | **4.29** | 届かない | 6.31 | 届かない |
+
+### H.265 1080p に対するビットレートの比(BD-rate、VMAF 80〜97 の幾何平均)
+
+| 場面 | プリセット | H.265 720p | H.264 1080p | H.264 720p |
+| --- | --- | ---: | ---: | ---: |
+| crowd | medium | 0.98 | 1.43 | 1.22 |
+| crowd | ultrafast | 1.06 | 2.13 | 1.87 |
+| road_dusk | medium | 1.51 | 1.56 | 2.04 |
+| road_dusk | ultrafast | 1.56 | 1.61 | 2.14 |
+
+- **720p は細部の多い映像で頭打ちになる**: road_dusk の 720p は CRF 18 でも VMAF 89〜91 が上限(縮めた時点で失われた細部は拡大しても
+  戻らない)。届く範囲でも H.265 1080p の約 1.5 倍のビットレートが要る
+- **細部の少ない映像では 720p と 1080p がほぼ同じ**: crowd は元が柔らかく、H.265 では差が ±6% 以内。H.264 だけは 720p の方が 12〜15% 少ない
+  (1080p の H.264 は動きの多い大きな画面の予測が弱い)
+- **H.264 は H.265 1080p の 1.4〜2.1 倍**。720p15 の測定(1.6 倍 / 1.15 倍)より、1080p30 の動きの多い場面で差が広がった
+  (crowd の ultrafast で 2.1 倍。x264 の ultrafast は CABAC なしの Constrained Baseline)
+- 下位 5% の VMAF で揃えても順位は同じ(比は平均で揃えたときから最大 0.15 動く。`summary.json` の `vmaf_p5`)
+- VMAF 93 に必要なビットレートは H.265 1080p で 3.4〜4.3 Mbps。場面の細かさで傾きが大きく違う(road_dusk は VMAF 85 なら 1.3 Mbps)
+- エンコードの CPU(30 秒、平均): H.265 1080p は medium 181〜316 秒、ultrafast 117〜166 秒。720p は 1080p の約 0.55〜0.75 倍。
+  実機のカメラはハードウェアエンコーダーなので、どちらのプリセットに近いかは導入するカメラで測る
+- 残っていること: 人が少ない(夜間)の場面、実機のカメラのエンコーダー、上限付き VBR / CBR での実際の転送量
+
+## 上限付き VBR: Quality と BitrateLimit の決め方(H.265 1080p30、2026-10-29)
+
+カメラの VBR は「画質の目標(ONVIF の Quality)+ ビットレートの上限(BitrateLimit)」で動く。x265 の CRF(= Quality)と
+`vbv-maxrate`(= 上限。`vbv-bufsize` は上限の 2 秒分)で、上の 2 場面を 3 / 4 / 5 Mbps の上限でエンコードし、同じ CRF の上限なしと比べた
+(`sweep --maxrate`、`capped`。生の値は `tools/codec/results/1080p30/capped.jsonl`、`capped_summary.json`)。
+シャドウからの設定は desired の `encoder`([contracts.md](contracts.md))。
+
+**目安: VMAF 93 を狙うなら、上限 4 Mbps と CRF 26 相当の Quality(エミュレーターの Quality 70)**。
+
+| 場面 | 設定 | 平均ビットレート | VMAF(平均) | VMAF(下位 5%) |
+| --- | --- | ---: | ---: | ---: |
+| crowd(動き多い) | CRF 26、上限なし | 7.20 Mbps | 100.0 | 100.0 |
+| crowd | CRF 26、上限 4 Mbps | 4.19 Mbps | 96.4 | 92.1 |
+| road_dusk | CRF 26、上限なし | 3.48 Mbps | 93.1 | 92.1 |
+| road_dusk | CRF 26、上限 4 Mbps | 3.48 Mbps(上限に届かない) | 93.1 | 92.1 |
+
+(medium。ultrafast もほぼ同じで、crowd は VMAF 95.2 / 下位 5% 90.0、road_dusk は 4.06 Mbps で 92.7 / 91.3)
+
+- **上限は動きの多い場面だけに効く**: crowd は上限なしだと必要以上の画質(VMAF 100)に 7.2 Mbps を使う。上限 4 Mbps で 42% 減り、
+  VMAF は 96 に落ちるだけ。road_dusk は上限より下で収まるので、何も変わらない。静かな時間帯の節約(Quality で決まる)は上限で損なわれない
+- **上限に当たると、画質は上限で決まる**(Quality を上げても変わらない)。crowd の VMAF(平均 / 下位 5%、medium)は上限 3 Mbps で
+  88〜89 / 78〜83、4 Mbps で 95.5〜96.5 / 87〜92、5 Mbps で 99 / 96〜97
+- **Quality を上げすぎると、上限に当たったときに画質が揺れる**: crowd の上限 3 Mbps では、CRF 22 の下位 5% が 77.6、CRF 30〜32 が 82.9。
+  高すぎる画質目標で使い過ぎてから上限で絞られるため。Quality は「動きの多い場面の上限なしのビットレートが、上限より少し上」くらいにする
+- **平均は上限を最大 6.3% 超え、1 秒単位では上限の 2〜3 倍になることがある**(上限 3 Mbps、CRF 22 の crowd で 1 秒 8.1 Mbps)。上限は
+  `vbv-bufsize`(2 秒分)を含めた平均の制約で、瞬間の上限ではない。カメラのバッファの大きさは ONVIF にない(機種ごと)ので、
+  回線の帯域は上限 + 余裕で見積もる。kvssink のバッファ(約 10 分)が瞬間の山を吸収する
+- 残っていること: 実機のハードウェアエンコーダーでの Quality → 画質の対応と、上限への張り付き方(機種ごとに違う)。
+  `tools/codec` の参照映像をカメラに映す方法はないので、実機で録った映像から VMAF 以外(ビットレートの推移、見た目)で確かめる
+
 ## 切り替えの使い方
 
 ### ビューワーから(配信を動かしたまま)
@@ -131,8 +211,20 @@ docker run --rm -v $PWD/tools/codec:/opt/codec:ro -v /tmp/codec:/work cc-codec-v
 docker run --rm -v $PWD/tools/codec:/opt/codec:ro -v /tmp/codec:/work cc-codec-vmaf:1 summarize
 ```
 
+1080p30 と 720p の比較(素材は [tools/codec/media/SOURCES.md](../tools/codec/media/SOURCES.md) から取り直して置く)。
+4 並列で ultrafast 約 1 時間、medium 約 3 時間(10 コア):
+
+```sh
+docker run --rm -v $PWD/tools/codec:/opt/codec:ro -v $PWD/tools/codec/media:/media:ro -v /tmp/codec1080:/work cc-codec-vmaf:1 \
+  prepare --scenes crowd,road_dusk --size 1920x1080 --fps 30
+docker run --rm -v $PWD/tools/codec:/opt/codec:ro -v /tmp/codec1080:/work cc-codec-vmaf:1 sweep /work/ref/crowd.mkv /work/ref/road_dusk.mkv \
+  --sizes 1280x720,1920x1080 --presets ultrafast,medium --jobs 4 \
+  --crf-h264 18,20,22,24,26,28,30,32,34,36,38,40 --crf-h265 20,22,24,26,28,30,32,34,36,38,40,42,44
+docker run --rm -v $PWD/tools/codec:/opt/codec:ro -v /tmp/codec1080:/work cc-codec-vmaf:1 summarize --targets 80,85,90,93,95
+```
+
 - 参照映像(FFV1 の可逆)はサンプル動画(`emulator/scripts/fetch_sample_media.py` の交差点、道路)、1 コマ静止 + ノイズ、testsrc に
   エミュレーターと同じ時刻の焼き込みを足したもの。エンコードの引数はエミュレーターと同じ(GOP 1 秒固定、シーンカットなし、B フレームなし、zerolatency)
 - CRF を 18〜38 で変え、VMAF とビットレートの曲線から、同じ VMAF になるビットレートを log 補間して比を出す(BD-rate は VMAF 80〜97 の幾何平均)
 - 参照の MKV の時刻(1 ms 単位)と 1/15 秒がずれると libvmaf の framesync が 1 つ前のフレームと比べてしまう(VMAF が 82 前後に落ちた)。両方の pts をフレーム番号で振り直している
-- 結果: `tools/codec/results/results.jsonl`(1 件 = 1 エンコード)、`summary.json`、`kvs_compare.json`
+- 結果: `tools/codec/results/results.jsonl`(1 件 = 1 エンコード)、`summary.json`、`kvs_compare.json`。1080p30 と 720p の比較は `tools/codec/results/1080p30/`

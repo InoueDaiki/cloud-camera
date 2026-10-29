@@ -23,6 +23,9 @@ build/
 # 大きいメディア・モデル
 *.onnx
 emulator/media/*.mp4
+# コーデック比較の素材(出典は tools/codec/media/SOURCES.md だけ残す)
+tools/codec/media/*
+!tools/codec/media/SOURCES.md
 # Claude Code のワークツリー
 .claude/worktrees/
 # ONNX の外部データ(モデルの準備で出る一時ファイル)
