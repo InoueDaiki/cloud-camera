@@ -1,0 +1,186 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1110 830" width="1110" height="830" role="img" aria-labelledby="title desc">
+  <title id="title">cloud-camera のアーキテクチャ</title>
+  <desc id="desc">エッジから Kinesis Video Streams に送った映像を Lambda が毎分 S3 へ退避し、物体検出の結果を Parquet に保存する。ビューワーは CloudFront 経由で録画と API を使い、ライブは WebRTC でエッジとつなぐ。</desc>
+  <style>
+    :root {
+      --bg: #ffffff; --text: #1f2937; --muted: #4b5563; --node: #f6f7f9; --stroke: #c4cad3; --group: #9aa3af;
+      --record: #2563eb; --live: #0f8a6d; --control: #6b7280;
+      --compute: #ed7100; --compute-bg: #fcebdb; --storage: #7aa116; --storage-bg: #ecf2de; --appint: #e7157b; --appint-bg: #fcdeed; --database: #c925d1; --database-bg: #f7e0f9; --analytics: #8c4fff; --analytics-bg: #efe6ff; --ml: #01a88d; --ml-bg: #dbf3ef;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0d1117; --text: #e6edf3; --muted: #b4bdc8; --node: #1a2029; --stroke: #414a57; --group: #5d6775;
+        --record: #6ea2ff; --live: #35c9a3; --control: #98a2af;
+        --compute: #ed7100; --compute-bg: #432811; --storage: #7aa116; --storage-bg: #273417; --appint: #e7157b; --appint-bg: #41122f; --database: #c925d1; --database-bg: #3a1644; --analytics: #8c4fff; --analytics-bg: #2b204f; --ml: #01a88d; --ml-bg: #0a3533;
+      }
+    }
+    text { font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans CJK JP", "Yu Gothic UI", Meiryo, sans-serif; fill: var(--text); }
+    .bg { fill: var(--bg); }
+    .group { fill: none; stroke: var(--group); stroke-width: 1.2; stroke-dasharray: 5 4; }
+    .group-label { font-size: 15px; font-weight: 700; fill: var(--muted); }
+    .node { fill: var(--node); stroke: var(--stroke); stroke-width: 1.4; }
+    .compute { fill: var(--compute-bg); stroke: var(--compute); }
+    .storage { fill: var(--storage-bg); stroke: var(--storage); }
+    .appint { fill: var(--appint-bg); stroke: var(--appint); }
+    .database { fill: var(--database-bg); stroke: var(--database); }
+    .analytics { fill: var(--analytics-bg); stroke: var(--analytics); }
+    .ml { fill: var(--ml-bg); stroke: var(--ml); }
+    .cap { fill: none; stroke-width: 1.4; }
+    .title { font-size: 15px; font-weight: 600; text-anchor: middle; }
+    .sub { font-size: 13px; fill: var(--muted); text-anchor: middle; }
+    .label { font-size: 13px; fill: var(--muted); paint-order: stroke; stroke: var(--bg); stroke-width: 5px; stroke-linejoin: round; }
+    .mid { text-anchor: middle; }
+    .flow { fill: none; stroke-width: 1.8; stroke-linejoin: round; }
+    .record { stroke: var(--record); }
+    .live { stroke: var(--live); }
+    .control { stroke: var(--control); }
+    .dashed { stroke-dasharray: 6 5; }
+    .head-record { fill: var(--record); }
+    .head-live { fill: var(--live); }
+    .head-control { fill: var(--control); }
+  </style>
+  <defs>
+    <marker id="a-record" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-record" d="M0 0 10 5 0 10z"/></marker>
+    <marker id="a-live" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-live" d="M0 0 10 5 0 10z"/></marker>
+    <marker id="a-control" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-control" d="M0 0 10 5 0 10z"/></marker>
+  </defs>
+
+  <rect class="bg" width="1110" height="830"/>
+
+  <!-- グループの枠 -->
+  <rect class="group" x="20" y="48" width="190" height="442" rx="10"/>
+  <text class="group-label" x="34" y="74">エッジ(Raspberry Pi 4 級)</text>
+  <rect class="group" x="290" y="48" width="190" height="442" rx="10"/>
+  <text class="group-label" x="304" y="74">取り込み</text>
+  <rect class="group" x="572" y="48" width="202" height="442" rx="10"/>
+  <text class="group-label" x="586" y="74">加工(毎分)</text>
+  <rect class="group" x="830" y="48" width="200" height="442" rx="10"/>
+  <text class="group-label" x="844" y="74">保存</text>
+  <rect class="group" x="290" y="580" width="810" height="136" rx="10"/>
+  <text class="group-label" x="304" y="602">配信・検索</text>
+
+  <!-- 録画 -->
+  <path class="flow record" marker-end="url(#a-record)" d="M60 176V230"/>
+  <path class="flow record" marker-end="url(#a-record)" d="M200 246H250V134H300"/>
+  <path class="flow record" marker-end="url(#a-record)" d="M592 125H470"/>
+  <path class="flow record" marker-end="url(#a-record)" d="M762 125H842"/>
+  <path class="flow record" marker-end="url(#a-record)" d="M762 302H800V154H842"/>
+  <path class="flow record" marker-end="url(#a-record)" d="M762 332H842"/>
+  <path class="flow record" marker-end="url(#a-record)" d="M1060 612V134H1018"/>
+
+  <!-- ライブ -->
+  <path class="flow live" marker-start="url(#a-live)" marker-end="url(#a-live)" d="M200 270H300"/>
+  <path class="flow live dashed" marker-start="url(#a-live)" marker-end="url(#a-live)" d="M180 420V775H985"/>
+
+  <!-- 制御・検索 -->
+  <path class="flow control" marker-end="url(#a-control)" d="M130 230V176"/>
+  <path class="flow control" marker-start="url(#a-control)" marker-end="url(#a-control)" d="M200 390H300"/>
+  <path class="flow control" marker-end="url(#a-control)" d="M677 200V164"/>
+  <path class="flow control" marker-end="url(#a-control)" d="M677 250V286"/>
+  <path class="flow control" marker-start="url(#a-control)" marker-end="url(#a-control)" d="M592 150H582V430H592"/>
+  <path class="flow control" marker-start="url(#a-control)" marker-end="url(#a-control)" d="M677 350V398"/>
+  <path class="flow control" d="M930 350V400"/>
+  <path class="flow control" marker-end="url(#a-control)" d="M526 612V150H470"/>
+  <path class="flow control" marker-end="url(#a-control)" d="M526 270H470"/>
+  <path class="flow control" marker-end="url(#a-control)" d="M526 390H470"/>
+  <path class="flow control" marker-end="url(#a-control)" d="M600 612V465"/>
+  <path class="flow control" marker-end="url(#a-control)" d="M446 626H396"/>
+  <path class="flow control dashed" marker-end="url(#a-control)" d="M396 662H446"/>
+  <path class="flow control" marker-end="url(#a-control)" d="M606 644H650"/>
+  <path class="flow control" marker-end="url(#a-control)" d="M700 612V540H930V460"/>
+  <path class="flow control" marker-end="url(#a-control)" d="M1010 676V698H526V676"/>
+  <path class="flow control" marker-end="url(#a-control)" d="M985 644H930"/>
+  <path class="flow control" marker-end="url(#a-control)" d="M1060 745V676"/>
+
+  <!-- エッジ -->
+  <rect class="node" x="30" y="96" width="170" height="80" rx="8"/>
+  <text class="title" x="115" y="118">カメラ</text>
+  <text class="sub" x="115" y="140">ONVIF / RTSP</text>
+  <text class="sub" x="115" y="160">H.265 main・H.264 sub</text>
+  <rect class="node" x="30" y="230" width="170" height="190" rx="8"/>
+  <text class="title" x="115" y="282">エッジのコンテナ</text>
+  <text class="sub" x="115" y="316">エージェント(Python)</text>
+  <text class="sub" x="115" y="338">kvssink(録画)</text>
+  <text class="sub" x="115" y="360">WebRTC master(ライブ)</text>
+
+  <!-- 取り込み -->
+  <rect class="node compute" x="300" y="96" width="170" height="76" rx="8"/>
+  <text class="title" x="385" y="126">Kinesis Video Streams</text>
+  <text class="sub" x="385" y="150">保持 1 時間</text>
+  <rect class="node compute" x="300" y="232" width="170" height="76" rx="8"/>
+  <text class="title" x="385" y="262">KVS シグナリング</text>
+  <text class="sub" x="385" y="286">チャネル(WebRTC)</text>
+  <rect class="node storage" x="300" y="346" width="170" height="88" rx="8"/>
+  <text class="title" x="385" y="372">IoT Core</text>
+  <text class="sub" x="385" y="396">シャドウ・MQTT</text>
+  <text class="sub" x="385" y="416">認証情報</text>
+
+  <!-- 加工 -->
+  <rect class="node compute" x="592" y="96" width="170" height="68" rx="8"/>
+  <text class="title" x="677" y="124">Lambda video_archiver</text>
+  <text class="sub" x="677" y="146">動画・HLS・スプライト</text>
+  <rect class="node appint" x="592" y="200" width="170" height="50" rx="8"/>
+  <text class="title" x="677" y="230">EventBridge Scheduler</text>
+  <rect class="node compute" x="592" y="286" width="170" height="64" rx="8"/>
+  <text class="title" x="677" y="312">Lambda detector</text>
+  <text class="sub" x="677" y="334">ONNX 物体検出</text>
+  <path class="node database" d="M592 406a85 8 0 0 1 170 0v50a85 8 0 0 1-170 0z"/>
+  <path class="cap database" d="M592 406a85 8 0 0 0 170 0"/>
+  <text class="title" x="677" y="432">DynamoDB</text>
+  <text class="sub" x="677" y="453">処理済み位置・区間</text>
+
+  <!-- 保存 -->
+  <path class="node storage" d="M842 104a88 8 0 0 1 176 0v60a88 8 0 0 1-176 0z"/>
+  <path class="cap storage" d="M842 104a88 8 0 0 0 176 0"/>
+  <text class="title" x="930" y="136">S3 media</text>
+  <text class="sub" x="930" y="158">clip.mp4 / m3u8 / sprite</text>
+  <path class="node storage" d="M842 294a88 8 0 0 1 176 0v48a88 8 0 0 1-176 0z"/>
+  <path class="cap storage" d="M842 294a88 8 0 0 0 176 0"/>
+  <text class="title" x="930" y="320">S3 detections</text>
+  <text class="sub" x="930" y="340">日ごとの Parquet</text>
+  <rect class="node analytics" x="842" y="400" width="176" height="60" rx="8"/>
+  <text class="title" x="930" y="436">Glue Data Catalog</text>
+
+  <!-- 配信・検索 -->
+  <rect class="node ml" x="306" y="612" width="90" height="64" rx="8"/>
+  <text class="title" x="351" y="649">Bedrock</text>
+  <rect class="node appint" x="446" y="612" width="160" height="64" rx="8"/>
+  <text class="title" x="526" y="638">API Gateway</text>
+  <text class="sub" x="526" y="660">+ Lambda api</text>
+  <rect class="node analytics" x="650" y="612" width="100" height="64" rx="8"/>
+  <text class="title" x="700" y="649">Athena</text>
+  <path class="node storage" d="M810 620a60 8 0 0 1 120 0v48a60 8 0 0 1-120 0z"/>
+  <path class="cap storage" d="M810 620a60 8 0 0 0 120 0"/>
+  <text class="title" x="870" y="654">S3 viewer</text>
+  <rect class="node analytics" x="985" y="612" width="105" height="64" rx="8"/>
+  <text class="title" x="1037" y="649">CloudFront</text>
+
+  <!-- ビューワー -->
+  <rect class="node" x="985" y="745" width="105" height="64" rx="8"/>
+  <text class="title" x="1037" y="772">ビューワー</text>
+  <text class="sub" x="1037" y="794">React</text>
+
+  <!-- 線のラベル -->
+  <text class="label" x="68" y="207">RTSP</text>
+  <text class="label" x="138" y="199">ONVIF</text>
+  <text class="label" x="138" y="217">設定・PTZ</text>
+  <text class="label mid" x="250" y="195">PutMedia</text>
+  <text class="label mid" x="250" y="262">WebRTC</text>
+  <text class="label mid" x="250" y="382">MQTT</text>
+  <text class="label mid" x="531" y="117">HLS 断片を取得</text>
+  <text class="label mid" x="800" y="230">clip.mp4</text>
+  <text class="label mid" x="800" y="248">を読む</text>
+  <text class="label mid" x="1060" y="380">/media</text>
+  <text class="label mid" x="957" y="636">/</text>
+  <text class="label mid" x="421" y="650">ツール</text>
+  <text class="label mid" x="780" y="690">/api</text>
+  <text class="label mid" x="560" y="769">WebRTC(P2P か TURN)</text>
+
+  <!-- 凡例 -->
+  <path class="flow record" marker-end="url(#a-record)" d="M30 572H66"/>
+  <text class="label" x="76" y="577">録画の流れ</text>
+  <path class="flow live" marker-end="url(#a-live)" d="M30 600H66"/>
+  <text class="label" x="76" y="605">ライブ</text>
+  <path class="flow control" marker-end="url(#a-control)" d="M30 628H66"/>
+  <text class="label" x="76" y="633">制御・検索</text>
+</svg>

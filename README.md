@@ -9,63 +9,7 @@ AWS のマネージドサービスとサーバーレスだけで、クラウド�
 
 ## アーキテクチャ
 
-```mermaid
-flowchart LR
-  subgraph Edge["エッジ(Raspberry Pi 4 級のゲートウェイ)"]
-    CAM["カメラ<br/>ONVIF / RTSP<br/>H.265 main・H.264 sub"]
-    GW["エッジのコンテナ<br/>エージェント(Python)<br/>kvssink(録画)<br/>WebRTC master(ライブ)"]
-    CAM -- RTSP --> GW
-    GW -- "ONVIF(設定・PTZ)" --> CAM
-  end
-
-  subgraph Ingest["取り込み"]
-    KVS["Kinesis Video Streams<br/>保持 1 時間"]
-    SIG["KVS シグナリングチャネル<br/>(WebRTC)"]
-    IOT["IoT Core<br/>シャドウ・MQTT・認証情報"]
-  end
-
-  subgraph Process["加工(毎分)"]
-    SCH["EventBridge Scheduler"]
-    VA["Lambda video_archiver<br/>動画・HLS・スプライト"]
-    DET["Lambda detector<br/>ONNX 物体検出"]
-    DDB[("DynamoDB<br/>処理済み位置・区間")]
-  end
-
-  subgraph Store["保存"]
-    S3M[("S3 media<br/>clip.mp4 / m3u8 / sprite")]
-    S3D[("S3 detections<br/>日ごとの Parquet")]
-    GLUE["Glue Data Catalog"]
-  end
-
-  subgraph Serve["配信・検索"]
-    CF["CloudFront"]
-    API["API Gateway + Lambda api"]
-    ATH["Athena"]
-    BR["Bedrock"]
-  end
-
-  VIEWER["ビューワー(React)"]
-
-  GW -- PutMedia --> KVS
-  GW <-- MQTT --> IOT
-  GW <-- WebRTC --> SIG
-  SCH --> VA & DET
-  VA -- "HLS 断片を取得" --> KVS
-  VA --> S3M
-  DET -- "clip.mp4 を読む" --> S3M
-  DET --> S3D
-  VA & DET <--> DDB
-  S3D --- GLUE
-  VIEWER --> CF
-  CF -- "/" --> S3V[("S3 viewer")]
-  CF -- "/media" --> S3M
-  CF -- "/api" --> API
-  API --> DDB & KVS & IOT & SIG
-  API --> BR
-  BR -. ツール .-> API
-  API --> ATH --> GLUE
-  VIEWER <-. "WebRTC(P2P か TURN)" .-> GW
-```
+![カメラの映像は、エッジから Kinesis Video Streams、Lambda を経て S3 に保存される。ビューワーは CloudFront 経由で録画と API を使い、ライブは WebRTC でエッジとつなぐ](docs/architecture.svg)
 
 ### 構成要素
 
