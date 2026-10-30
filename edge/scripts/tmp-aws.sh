@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # 検証用の一時 AWS リソース(名前は TMP_PROJECT、既定 cc-tmp-edge。cc-tmp- で始めること)を作る / 消す。
+# 並行して別の検証をするときは TMP_PROJECT を変える(例: TMP_PROJECT=cc-tmp-edgebuf)。
 # Terraform(infra/)を使わずにエッジ単体を実 AWS で試すためのもの。
 #
 #   edge/scripts/tmp-aws.sh up     # 作成して edge/.certs/gw-001/ に証明書と config.json を書く
@@ -17,6 +18,8 @@ CAMS="${TMP_CAMERAS:-cam-001}"
 # kvssink が IoT から受け取る一時認証情報の有効期間(秒、900〜43200)。回線断の最中に取り直しが来ると
 # kvssink がエラーで止まりバッファが消えるので、長いほど起きにくい(edge/README.md の「回線断とバッファ」)
 CRED_S="${TMP_CREDENTIAL_S:-3600}"
+# H.264 で送るカメラ(KVS ストリームの media type を video/h264 にする。ほかは video/h265。docs/codec.md)
+H264_CAMS=" ${TMP_H264_CAMERAS:-} "
 REGION="${AWS_REGION:-ap-northeast-1}"
 export AWS_PROFILE="${AWS_PROFILE:-cloud-camera}" AWS_REGION="$REGION" AWS_PAGER=""
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

@@ -65,7 +65,7 @@ export function CodecSetting({ camera: c }: { camera: Camera }) {
           <Radio
             value="H.265"
             label="H.265(推奨)"
-            description="帯域と保存の費用が少ない。Firefox など一部のブラウザでは再生できない"
+            description="帯域と保存の費用が少ない。Edge(拡張なし)や古い PC など一部の環境では再生できない"
             disabled={mutation.isPending}
           />
           <Radio
