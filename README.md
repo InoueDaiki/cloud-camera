@@ -119,3 +119,9 @@ terraform、Python、Node.js、uv などのバージョンは `mise.toml` で管
 | 全体を通す検証(E2E。一時環境を作って消す) | `scripts/e2e/run.sh [cc-tmp-*]`(詳細は [docs/e2e.md](docs/e2e.md)) |
 
 検証用の環境は `cc-tmp-` で始まる名前で作り、終わったら必ず削除する。このアカウントは Lambda の同時実行の上限が 10 なので、環境は 1 つずつ動かす。
+
+## ライセンス
+
+Copyright (c) 2026 InoueDaiki. All rights reserved.
+
+ライセンスは設定していません。`emulator/tests/wsdl/` の ONVIF のスキーマなど、第三者のファイルはそれぞれの著作権表示に従います。
